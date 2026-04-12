@@ -1,0 +1,8 @@
+{
+  "name": "僵尸助手",
+  "main": "main.js",
+  "ignore": [],
+  "packageName": "com.zombie.assistant",
+  "versionCode": 1,
+  "versionName": "1.0.0"
+}

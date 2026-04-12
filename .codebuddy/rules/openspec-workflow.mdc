@@ -1,0 +1,43 @@
+---
+description: 
+alwaysApply: true
+enabled: true
+updatedAt: 2026-04-11T14:38:17.542Z
+provider: 
+---
+
+# OpenSpec 工作流规则
+
+本项目使用 OpenSpec 进行规范驱动开发。在处理需求变更时，必须遵循以下流程：
+
+## 工作流程
+
+1. **创建变更提案 (Change Proposal)**
+   - 收到新需求时，先使用 `openspec change` 创建变更
+   - 在 `openspec/changes/<change-name>/proposal.md` 中编写提案
+   - 提案需包含：变更描述、目标、范围、非目标
+
+2. **查看和验证**
+   - 使用 `openspec list` 查看所有变更
+   - 使用 `openspec show <change-name>` 查看变更详情
+   - 使用 `openspec validate <change-name>` 验证变更
+
+3. **生成实施指令**
+   - 使用 `openspec instructions <artifact>` 获取创建制品的详细指令
+   - 按照指令逐步实施变更
+
+4. **归档完成的变更**
+   - 变更完成后使用 `openspec archive <change-name>` 归档
+   - 归档会更新主规范文件
+
+## 项目配置
+
+- 配置文件位于 `openspec/config.yaml`
+- schema 类型：`spec-driven`
+- 上下文信息写在 `config.yaml` 的 `context` 字段中
+
+## 注意事项
+
+- 每次代码修改必须对应一个 openspec change
+- 不要跳过 proposal 阶段直接写代码
+- 变更归档前必须通过 validate 验证

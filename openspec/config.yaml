@@ -1,0 +1,22 @@
+schema: spec-driven
+
+context: |
+  Tech stack: AutoX.js (JavaScript), Android
+  框架: AutoX.js 自动化框架（基于 Rhino/V8 引擎）
+  图像识别: AutoX.js images 模块（模板匹配、找色、OCR）
+  自动化操作: AutoX.js auto 模块（无障碍服务封装）
+  截图: AutoX.js captureScreen API
+  目标游戏: 僵尸题材手机游戏（环球救援/远征/日常/主线等玩法）
+  核心逻辑: 状态机驱动的游戏自动化脚本
+  商业模式: 卡密付费制
+  项目正在从 Android 原生（Kotlin）迁移到 AutoX.js
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours

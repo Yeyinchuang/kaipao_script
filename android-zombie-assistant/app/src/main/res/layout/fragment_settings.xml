@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".SettingsFragment">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- 卡密输入 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="<<<<<<<<<<<输入卡密>>>>>>>>>>"
+            android:textAlignment="center"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/et_card_key"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="在此输入..."
+            android:layout_marginVertical="8dp" />
+
+        <!-- 任务选择 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="<<<<<<<<<<<执行任务>>>>>>>>>>"
+            android:textAlignment="center"
+            android:textStyle="bold"
+            android:layout_marginTop="16dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginVertical="8dp">
+
+            <CheckBox
+                android:id="@+id/cb_daily"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="日常" />
+
+            <CheckBox
+                android:id="@+id/cb_main"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="主线"
+                android:layout_marginStart="16dp" />
+
+            <CheckBox
+                android:id="@+id/cb_rescue"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="寰球救援"
+                android:layout_marginStart="16dp" />
+
+            <CheckBox
+                android:id="@+id/cb_expedition"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="寰球远征"
+                android:layout_marginStart="16dp" />
+
+        </LinearLayout>
+
+        <!-- 副本计数限制 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="<<<<<<<<<<<副本计数限制(0则不限)>>>>>>>>>>"
+            android:textAlignment="center"
+            android:textStyle="bold"
+            android:layout_marginTop="16dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginVertical="8dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="按次数设置 /次: " />
+
+            <EditText
+                android:id="@+id/et_count_limit"
+                android:layout_width="80dp"
+                android:layout_height="wrap_content"
+                android:text="50"
+                android:inputType="number" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=" 次/体力"
+                android:layout_marginStart="8dp" />
+
+        </LinearLayout>
+
+        <!-- 组队页面超时 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginVertical="8dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="组队页面超: " />
+
+            <EditText
+                android:id="@+id/et_team_timeout"
+                android:layout_width="80dp"
+                android:layout_height="wrap_content"
+                android:text="60"
+                android:inputType="number" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=" 秒,退出组队"
+                android:layout_marginStart="8dp" />
+
+        </LinearLayout>
+
+        <!-- 角色自动领取 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="<<<<<<<<<<<角色自动领取>>>>>>>>>>"
+            android:textAlignment="center"
+            android:textStyle="bold"
+            android:layout_marginTop="16dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginVertical="8dp">
+
+            <CheckBox
+                android:id="@+id/cb_auto_claim"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="(自动领取" />
+
+            <CheckBox
+                android:id="@+id/cb_multi_role"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="多角色)"
+                android:layout_marginStart="8dp" />
+
+        </LinearLayout>
+
+        <!-- 资源领取 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginVertical="8dp">
+
+            <CheckBox
+                android:id="@+id/cb_claim_stamina"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="领体力" />
+
+            <CheckBox
+                android:id="@+id/cb_claim_rescue_ticket"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="寰球票"
+                android:layout_marginStart="16dp" />
+
+            <CheckBox
+                android:id="@+id/cb_claim_expedition_ticket"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="远征票"
+                android:layout_marginStart="16dp" />
+
+            <CheckBox
+                android:id="@+id/cb_claim_legion_ticket"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="军团买票"
+                android:layout_marginStart="16dp" />
+
+        </LinearLayout>
+
+        <!-- 加载按钮 -->
+        <Button
+            android:id="@+id/btn_load"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="加载"
+            android:backgroundTint="#2196F3"
+            android:textColor="#FFFFFF"
+            android:layout_marginTop="32dp" />
+
+    </LinearLayout>
+
+</ScrollView>
