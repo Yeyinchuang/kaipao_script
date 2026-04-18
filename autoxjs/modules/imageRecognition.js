@@ -107,16 +107,44 @@ function ImageRecognition(config) {
 
 /**
  * 请求截图并获取当前屏幕图像
+ * AutoXJS已知问题：captureScreen()有时返回已回收的图片对象
+ * 解决：返回前验证图片有效性；已回收时必须重建截图服务才能恢复
  */
 ImageRecognition.prototype.captureScreen = function () {
-    var maxRetry = 3;
+    var maxRetry = 5;
     for (var i = 0; i < maxRetry; i++) {
         try {
             var result = images.captureScreen();
-            if (result) return result;
-            log("截图返回空，重试 (" + (i + 1) + "/" + maxRetry + ")");
+            if (!result) {
+                log("截图返回空，重试 (" + (i + 1) + "/" + maxRetry + ")");
+                if (i < maxRetry - 1) sleep(1000);
+                continue;
+            }
+            // 验证图片是否已被回收（AutoXJS常见bug）
+            try {
+                var w = result.getWidth();
+                if (w <= 0) throw new Error("尺寸无效");
+                return result; // 有效，返回
+            } catch (verifyErr) {
+                log("截图返回已回收图片，重建截图服务 (" + (i + 1) + "/" + maxRetry + ")");
+                try { result.recycle(); } catch (re) {}
+                // ★ 关键：必须重建截图服务，否则captureScreen()永远返回同一个回收引用
+                try { images.releaseScreenCapture(); } catch (re) {}
+                sleep(500);
+                try { requestScreenCapture(false); } catch (re) {}
+                sleep(1000); // 等截图服务重新初始化
+                continue;
+            }
         } catch (e) {
             log("截图失败 (" + (i + 1) + "/" + maxRetry + "): " + e.message);
+            // ScreenCapturer is not available → 截图服务崩了
+            if (e.message && e.message.indexOf("not available") >= 0) {
+                log("截图服务不可用，重建...");
+                try { images.releaseScreenCapture(); } catch (re) {}
+                sleep(500);
+                try { requestScreenCapture(false); } catch (re) {}
+                sleep(1000);
+            }
         }
         if (i < maxRetry - 1) sleep(1000);
     }

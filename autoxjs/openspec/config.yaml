@@ -1,0 +1,105 @@
+schema: spec-driven
+
+context: |
+  ## 项目概述
+  僵尸助手 - 基于 AutoX.js 的游戏自动化脚本（从 Android Kotlin 迁移而来）
+  目标游戏: 向僵尸开炮（微信小程序，运行在微信 com.tencent.mm 内）
+  运行环境: MuMu 模拟器 (Android), AutoX.js v6
+  
+  ## 技术栈
+  - 语言: JavaScript (ES5, AutoX.js Rhino/V8 引擎，不支持 ES6+)
+  - 框架: AutoX.js 自动化框架
+  - 图像识别: AutoX.js images 模块（模板匹配 + OCR）
+  - 自动化操作: AutoX.js auto 模块（无障碍服务封装）
+  - 截图: requestScreenCapture(false) + images.captureScreen()
+  - 悬浮窗: floaty.window() / floaty.rawWindow()
+  - 持久化: storages API (键值对存储)
+  
+  ## 目录结构
+  ```
+  autoxjs/
+  ├── main.js              # 主入口，初始化+悬浮窗+任务循环
+  ├── project.json          # AutoX.js 项目配置
+  ├── modules/
+  │   ├── imageRecognition.js  # 图像识别（OCR+模板匹配+场景检测）
+  │   ├── taskManager.js       # 状态机驱动的任务管理
+  │   ├── configManager.js     # 配置管理（storages持久化）
+  │   └── cardKeyManager.js    # 卡密验证（已屏蔽）
+  └── templates/            # 模板图片（按场景分子目录）
+      ├── battle/           # 战斗场景模板
+      ├── huanqiu/          # 寰球救援模板
+      ├── menu/             # 菜单模板
+      ├── training/         # 历练大厅模板
+      └── yuanzheng/        # 远征模板
+  ```
+  
+  ## 核心架构
+  ### 启动流程 (main.js) — 已重构为延迟截图模式
+  1. 检查悬浮窗权限 (floaty.checkPermission)
+  2. auto.waitFor() — 等待无障碍服务
+  3. showFloaty() — 显示 rawWindow 悬浮控制窗（红色侧边条）
+  4. 等待用户手动切到游戏 → 点[启动]按钮
+  5. 点启动时才 requestScreenCapture(true) — 截图锁定游戏窗口
+  6. taskManager.start() — 启动状态机循环
+  
+  ### 场景识别 (imageRecognition.js)
+  - SCENE_RULES 规则表定义场景映射（优先级+OCR关键词+模板）
+  - detectScene(): OCR全屏识别 → 预处理（灰度化+滤波）→ 模板匹配
+  - 8个场景: COMPLETE_TURN, TEAM_HALL, TRAINING_HALL, BASE_MENU, 
+    MAIN_MENU, GAME_ROOM, JINGYING_BATTLE, HUANQIU_BATTLE
+  
+  ### 状态机 (taskManager.js)
+  - 状态: INIT → MAIN_MENU → BASE_MENU → TRAINING_HALL → GAME_ROOM → TEAM_HALL → BATTLE
+  - 核心循环: 截图 → 场景识别 → 状态机处理 → recycle截图 → sleep(1s)
+  - 场景驱动: 操作不硬编码下一状态，由下次检测自然流转
+  
+  ## 已知问题及已验证结论
+
+  ### ✅ 已解决：截图锁定AutoXJS窗口
+  **根因**：requestScreenCapture() 会锁定调用时前台的窗口。从AutoXJS编辑器启动脚本时，
+  前台是AutoXJS，截图服务锁定AutoXJS窗口，后续captureScreen()永远截到编辑器。
+  **解决方案**：启动时不截图，用户手动切到游戏后点[启动]按钮时才调用requestScreenCapture()，
+  并用 currentPackage() 校验前台包名，非游戏则拒绝启动。
+  **关键日志**：`[启动] 点启动时前台包名: com.tencent.mm` ← 必须是微信才对
+
+  ### ✅ 已解决：image recycled 死循环
+  **根因**：AutoXJS的captureScreen()内部会缓存截图帧。调用recycle()后底层bitmap被释放，
+  但缓存引用还在，后续captureScreen()返回已回收的引用 → IllegalStateException。
+  单纯重试captureScreen()无法恢复（永远返回同一个回收引用）。
+  **解决方案**：captureScreen()中检测到已回收图片时，必须 releaseScreenCapture() + 
+  requestScreenCapture(false) 重建截图服务，才能拿到新帧。
+  **注意**：启动时绝不能做测试截图再recycle()，会毒害整个截图缓存！
+
+  ### ✅ 已解决：悬浮窗游戏内不可见
+  **根因**：MuMu 模拟器的"后台挂机保活运行"选项会劫持窗口层级，
+  导致所有 overlay 窗口（包括 TYPE_APPLICATION_OVERLAY、TYPE_ACCESSIBILITY_OVERLAY）
+  在游戏/微信小程序内被隐藏。**关闭该选项后 rawWindow 正常显示**。
+  **解决方案**：MuMu 设置中心 → 关闭"后台挂机时保活运行"
+  **当前方案**：floaty.rawWindow() + 用户手动切游戏后点[启动]按钮
+
+  ### 待解决：连续 UNKNOWN 无恢复
+  场景连续识别失败时无自动重置机制，会卡在UNKNOWN状态。
+  
+  ## AutoX.js 限制与踩坑记录
+  - 不支持 ES6+ (let/const/arrow/class/template literals)
+  - 颜色值必须6位 (#ffffff, 不能 #fff)
+  - floaty XML 中 id 不能用内置名 (close/stop/start)
+  - requestScreenCapture(false) 不弹确认框，但可能权限未真正授予；
+    requestScreenCapture(true) 弹系统确认框，确保MediaProjection权限
+  - rawWindow 需要"显示在其他应用上层"权限，floaty.checkPermission()可检查
+  - MuMu模拟器"后台挂机保活运行"会劫持窗口层级，导致overlay在游戏内不可见，必须关闭
+  - captureScreen() 内部缓存帧，recycle()后缓存失效，后续调用返回已回收图片
+  - 截图服务锁定调用时前台窗口，必须在目标应用前台时调用requestScreenCapture()
+  - recents() + click() 切前台在华为/MuMu设备上不可靠，app.launch()更靠谱
+  - MuMu模拟器截图尺寸可能是横屏(1280x720)，与屏幕尺寸(720x1280)不一致
+
+# Per-artifact rules (optional)
+rules:
+  proposal:
+    - Keep proposals under 500 words
+    - Always include a "Non-goals" section
+    - Mention which known issues are affected
+  tasks:
+    - Break tasks into chunks of max 2 hours
+    - Test changes on MuMu emulator
+    - Verify floaty visibility in WeChat mini-program
