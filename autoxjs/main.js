@@ -25,6 +25,12 @@ var isRunning = false;
  * 主函数
  */
 function main() {
+    // 请求截图权限
+    if (!requestScreenCapture(false)) {
+        toast("请求截图失败");
+        exit();
+    }
+
     // 检查无障碍服务
     if (!auto.service) {
         toast("请先开启无障碍服务");
@@ -34,7 +40,11 @@ function main() {
     // 显示悬浮窗
     showFloaty();
 
-    toast("请切到游戏，点[助手]→[启动]");
+    toast("僵尸助手已启动");
+    isRunning = true;
+
+    // 启动任务循环
+    taskManager.start();
 
     // 保持脚本运行
     setInterval(function () {}, 1000);
@@ -45,84 +55,56 @@ function main() {
  */
 function showFloaty() {
     var isExpanded = false;
-    var window = floaty.rawWindow(
+    var window = floaty.window(
         <frame>
             <vertical id="panel" visibility="gone" bg="#cc000000" padding="6">
                 <text id="status" textSize="11sp" textColor="#00ff00" padding="3">待机</text>
-                <horizontal>
-                    <button id="btnStart" textSize="9sp" w="45" h="26">启动</button>
-                    <button id="btnStop" textSize="9sp" w="45" h="26">停止</button>
-                    <button id="btnClose" textSize="9sp" w="45" h="26">关闭</button>
-                </horizontal>
+                <button id="btnStart" textSize="9sp" w="*" h="28">启动</button>
+                <button id="btnStop" textSize="9sp" w="*" h="28">停止</button>
+                <button id="btnClose" textSize="9sp" w="*" h="28">关闭脚本</button>
             </vertical>
-            <vertical id="tab" bg="#cc3333" w="22">
-                <text textColor="#ffffff" textSize="10sp" rotation="90" gravity="center" padding="2">助手</text>
+            <vertical id="tab" bg="#88000000" w="16">
+                <text textColor="#aaaaaa" textSize="10sp" rotation="90" gravity="center" padding="2">助手</text>
             </vertical>
         </frame>
     );
-    window.setSize(-2, -2);
 
     // 定位到屏幕右侧边缘
     var sw = device.width || 720;
-    window.setPosition(sw - 24, 200);
+    window.setPosition(sw - 18, 200);
 
     // 点击侧边栏切换展开/收起
     window.tab.on("click", function () {
         isExpanded = !isExpanded;
         window.panel.setVisibility(isExpanded ? 0 : 8);
         if (isExpanded) {
-            window.setPosition(sw - 170, 200);
+            window.setPosition(sw - 110, 200);
         } else {
-            window.setPosition(sw - 24, 200);
+            window.setPosition(sw - 18, 200);
         }
     });
 
-    // 点启动 → 子线程截图 + 跑任务
     window.btnStart.on("click", function () {
-        if (isRunning) return;
-        threads.start(function () {
-            var pkg = currentPackage();
-            log("[启动] 前台包名: " + pkg);
-
-            // 如果还在 AutoXJS/桌面，提示切到游戏
-            if (pkg.indexOf("autoxjs") >= 0 || pkg.indexOf("systemui") >= 0 || 
-                pkg.indexOf("lawnchair") >= 0 || pkg.indexOf("launcher") >= 0) {
-                toast("请先切到游戏再点启动！");
-                return;
-            }
-
-            // 请求截图权限（此时前台是游戏，截图锁定游戏窗口）
-            log("[启动] 请求截图权限...");
-            var capResult = false;
-            try { capResult = requestScreenCapture(true); } catch (e) {}
-            if (!capResult) {
-                try { capResult = requestScreenCapture(false); } catch (e) {}
-            }
-            if (!capResult) {
-                toast("截图权限获取失败！");
-                return;
-            }
-            log("[启动] 截图权限已获取, 前台包名: " + currentPackage());
-
+        if (!isRunning) {
             isRunning = true;
             taskManager.start();
-            ui.post(function () {
-                window.status.setText("运行中");
-                toast("已启动");
-            });
-        });
+            window.status.setText("状态: 运行中");
+            toast("已启动");
+        }
     });
 
     window.btnStop.on("click", function () {
         isRunning = false;
         taskManager.stop();
-        window.status.setText("已停止");
+        window.status.setText("状态: 已停止");
         toast("已停止");
     });
 
     window.btnClose.on("click", function () {
         isRunning = false;
         taskManager.stop();
+        // ★ 关闭悬浮窗
+        window.close();
         toast("已关闭");
         exit();
     });
@@ -139,8 +121,21 @@ function showFloaty() {
             });
         }
     }, 500);
+}
 
-    return window;
+/**
+ * 显示卡密输入对话框
+ */
+function showCardKeyDialog() {
+    dialogs.rawInput("请输入卡密").then(function (key) {
+        if (key && cardKeyManager.activate(key)) {
+            toast("激活成功");
+            main();
+        } else {
+            toast("卡密无效");
+            showCardKeyDialog();
+        }
+    });
 }
 
 // 启动

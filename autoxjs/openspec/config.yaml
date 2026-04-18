@@ -63,12 +63,9 @@ context: |
   **关键日志**：`[启动] 点启动时前台包名: com.tencent.mm` ← 必须是微信才对
 
   ### ✅ 已解决：image recycled 死循环
-  **根因**：AutoXJS的captureScreen()内部会缓存截图帧。调用recycle()后底层bitmap被释放，
-  但缓存引用还在，后续captureScreen()返回已回收的引用 → IllegalStateException。
-  单纯重试captureScreen()无法恢复（永远返回同一个回收引用）。
-  **解决方案**：captureScreen()中检测到已回收图片时，必须 releaseScreenCapture() + 
-  requestScreenCapture(false) 重建截图服务，才能拿到新帧。
-  **注意**：启动时绝不能做测试截图再recycle()，会毒害整个截图缓存！
+  **根因**：在 main.js 启动时做测试截图 `images.captureScreen()` 再 `recycle()`，
+  导致 AutoXJS 截图缓存被破坏，后续 captureScreen() 返回已回收引用。
+  **解决方案**：删除启动时的测试截图代码，不再 recycle 未使用的截图。
 
   ### ✅ 已解决：悬浮窗游戏内不可见
   **根因**：MuMu 模拟器的"后台挂机保活运行"选项会劫持窗口层级，
@@ -88,7 +85,7 @@ context: |
     requestScreenCapture(true) 弹系统确认框，确保MediaProjection权限
   - rawWindow 需要"显示在其他应用上层"权限，floaty.checkPermission()可检查
   - MuMu模拟器"后台挂机保活运行"会劫持窗口层级，导致overlay在游戏内不可见，必须关闭
-  - captureScreen() 内部缓存帧，recycle()后缓存失效，后续调用返回已回收图片
+  - captureScreen() 返回的图片不能随意 recycle()，否则会破坏截图缓存导致后续返回已回收图片
   - 截图服务锁定调用时前台窗口，必须在目标应用前台时调用requestScreenCapture()
   - recents() + click() 切前台在华为/MuMu设备上不可靠，app.launch()更靠谱
   - MuMu模拟器截图尺寸可能是横屏(1280x720)，与屏幕尺寸(720x1280)不一致
