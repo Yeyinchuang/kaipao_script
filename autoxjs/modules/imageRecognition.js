@@ -31,8 +31,8 @@ var SCENE_RULES = [
     {
         scene: "TRAINING_HALL",
         priority: 1,
-        ocrKeywords: ["玩法商店"],
-        minMatch: 1,
+        ocrKeywords: ["玩法商店", "深渊挑战", "寰球远征", "终末危机", "获取防线核心材料"],
+        minMatch: 2,
         templates: ["training_hall_menu"]
     },
     {

@@ -162,9 +162,8 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
 
         // ==================== INIT ====================
         case "INIT":
-            log("  [状态机] INIT -> MAIN_MENU (立即切换)");
-            this._switchState("MAIN_MENU", currentTime);
-            toast("→ 进入主菜单检测");
+            log("  [状态机] INIT -> " + sceneType + " (跟随实际场景)");
+            this._switchState(sceneType, currentTime);
             break;
 
         // ==================== MAIN_MENU ====================
@@ -310,6 +309,26 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
 
         // ==================== IDLE ====================
         case "IDLE":
+            break;
+
+        // ==================== UNKNOWN ====================
+        // 未知状态：直接跟随场景切换到对应状态
+        case "UNKNOWN":
+            if (sceneType === "UNKNOWN") {
+                // 连续未知，保持等待（unknownCount 在上层已处理）
+                break;
+            }
+            log("  [状态机] UNKNOWN -> " + sceneType + " (跟随场景)");
+            this._switchState(sceneType, currentTime);
+            break;
+
+        // ==================== default ====================
+        // 其他未知状态，跟随场景
+        default:
+            if (sceneType && sceneType !== this.currentState) {
+                log("  [状态机] 默认: " + this.currentState + " -> " + sceneType);
+                this._switchState(sceneType, currentTime);
+            }
             break;
     }
 };
@@ -613,41 +632,34 @@ TaskManager.prototype.trainingHallActions = function (screenshot) {
  * 流程: 点击hp100冒泡图标进入队伍 → 尝试点击"开始游戏" → 无目标则退出回招募
  */
 TaskManager.prototype.gameRoomActions = function (screenshot) {
-    log(">>> 执行 gameRoomActions: 处理房间内操作");
-    toast("操作: 游戏房间处理");
+    log(">>> 执行 gameRoomActions: 点击冒泡进入组队");
+    toast("操作: 点击冒泡进入");
 
-    var clicked = false;
-
-    // 步骤1: 点击房间冒泡（进入实际战斗房间/队伍）
+    // 步骤1: 点击房间冒泡（hp100_icon 模板）
     var hpResults = this.imageRecognition.findAllTemplates(screenshot, "hp100_icon");
     if (hpResults.length > 0) {
-        log("  [游戏房间] 找到 " + hpResults.length + " 个 hp100 冒泡，点击进入");
+        log("  [游戏房间] ✓ 找到 " + hpResults.length + " 个 hp100 冒泡，点击进入");
         this.clickAllPositions(hpResults);
-        clicked = true;
         sleep(2000);
+        log("<<< gameRoomActions 完成");
+        return;
     }
 
-    // 步骤2: 如果已在房间里，尝试点击"开始游戏"
-    var startGamePos = this.imageRecognition.findTextPosition(screenshot, "开始游戏", 0.7, null, false);
-    if (startGamePos && startGamePos.x > 0) {
-        log("  [游戏房间] ✓ 找到'开始游戏'按钮，点击开始");
-        click(startGamePos.x, startGamePos.y);
-        clicked = true;
+    // 步骤2: 模板没找到，通过右侧"邀请码"区域定位冒泡
+    var invitePos = this.imageRecognition.findTextPosition(screenshot, "邀请码", 0.6, null, false);
+    if (invitePos && invitePos.x > 0) {
+        // 冒泡在邀请码左侧
+        click(invitePos.x - 80, invitePos.y);
+        log("  [游戏房间] ✓ 通过'邀请码'定位点击冒泡 (" + (invitePos.x-80) + ", " + invitePos.y + ")");
         sleep(2000);
+        log("<<< gameRoomActions 完成");
+        return;
     }
 
-    // 步骤3: 没可操作目标，退出回招募列表
-    if (!clicked) {
-        log("  [游戏房间] 无可操作目标，返回招募列表");
-        var recruitPos = this.imageRecognition.findTextPosition(screenshot, "招募", 0.7, null, false);
-        if (recruitPos && recruitPos.x > 0) {
-            click(recruitPos.x, recruitPos.y);
-        } else {
-            click(Math.floor(screenshot.getWidth() * 0.07), Math.floor(screenshot.getHeight() * 0.95));
-        }
-        sleep(1500);
-    }
-
+    // 步骤3: 都没找到，点击屏幕中部偏右的常见冒泡位置
+    click(Math.floor(screenshot.getWidth() * 0.88), Math.floor(screenshot.getHeight() * 0.55));
+    log("  [游戏房间] 兜底：点击右侧冒泡区域");
+    sleep(2000);
     log("<<< gameRoomActions 完成");
 };
 
