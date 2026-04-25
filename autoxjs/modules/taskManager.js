@@ -137,7 +137,9 @@ TaskManager.prototype.getCurrentState = function () {
         "BASE_MENU": "基地",
         "TRAINING_HALL": "历练大厅",
         "GAME_ROOM": "游戏房间",
-        "TEAM_HALL": "组队大厅",
+        "WAITING_START": "等待开始",
+        "TEAM_HALL": "组队频道",
+        "RECRUIT_CHANNEL": "招募频道",
         "BATTLE": "战斗中",
         "GLOBAL_EXPEDITION": "环球远征"
     };
@@ -211,10 +213,10 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
 
         // ==================== GAME_ROOM ====================
         case "GAME_ROOM":
-            if (this._tryFollowScene(sceneType, currentTime, ["TEAM_HALL", "JINGYING_BATTLE", "HUANQIU_BATTLE", "COMPLETE_TURN"])) return;
+            if (this._tryFollowScene(sceneType, currentTime, ["TEAM_HALL", "WAITING_START", "JINGYING_BATTLE", "HUANQIU_BATTLE", "COMPLETE_TURN"])) return;
             if (sceneType === "GAME_ROOM") {
                 if (this._shouldRetryAction(currentTime, 5000)) {
-                    toast("✓ 游戏房间，执行操作");
+                    toast("✓ 游戏房间，点击冒泡");
                     this.gameRoomActions(screenshot);
                 }
             } else if (currentTime - this.lastStateChangeTime > 25000) {
@@ -223,15 +225,40 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
             }
             break;
 
-        // ==================== TEAM_HALL ====================
+        // ==================== WAITING_START (等待开始) ====================
+        case "WAITING_START":
+            // 已抢到房间，等待房主开始游戏，5秒后重新识别场景
+            if (sceneType === "WAITING_START") {
+                log("  [等待开始] 已在房间等待中，5秒后重新识别");
+                sleep(5000);
+            } else {
+                // 场景变了（进入战斗/结算等），跟随切换
+                this._tryFollowScene(sceneType, currentTime);
+            }
+            break;
+
+        // ==================== TEAM_HALL (组队频道) ====================
         case "TEAM_HALL":
             if (this._tryFollowScene(sceneType, currentTime)) return;
             if (sceneType === "TEAM_HALL") {
-                if (this._shouldRetryAction(currentTime, 8000)) {
+                if (this._shouldRetryAction(currentTime, 5000)) {
                     this.teamHallActions(screenshot);
                 }
-            } else if (currentTime - this.lastStateChangeTime > 35000) {
-                log("  [状态机] TEAM_HALL 超时35s，处理超时");
+            } else if (currentTime - this.lastStateChangeTime > 30000) {
+                log("  [状态机] TEAM_HALL 超时30s，处理超时");
+                this._handleTimeoutAndReset(currentTime, "MAIN_MENU");
+            }
+            break;
+
+        // ==================== RECRUIT_CHANNEL (招募频道) ====================
+        case "RECRUIT_CHANNEL":
+            if (this._tryFollowScene(sceneType, currentTime, ["TEAM_HALL"])) return;
+            if (sceneType === "RECRUIT_CHANNEL") {
+                if (this._shouldRetryAction(currentTime, 3000)) {
+                    this.recruitChannelActions(screenshot);
+                }
+            } else if (currentTime - this.lastStateChangeTime > 60000) {
+                log("  [状态机] RECRUIT_CHANNEL 超时60s，处理超时");
                 this._handleTimeoutAndReset(currentTime, "MAIN_MENU");
             }
             break;
@@ -635,28 +662,27 @@ TaskManager.prototype.gameRoomActions = function (screenshot) {
     log(">>> 执行 gameRoomActions: 点击冒泡进入组队");
     toast("操作: 点击冒泡进入");
 
-    // 步骤1: 点击房间冒泡（hp100_icon 模板）
+    // 步骤1: 点击聊天冒泡图标（chat_bubble_icon 模板）
+    var bubbleResult = this.imageRecognition.matchTemplate(screenshot, "chat_bubble_icon", 0.7);
+    if (bubbleResult.found) {
+        log("  [游戏房间] ✓ 找到冒泡图标: (" + bubbleResult.x + ", " + bubbleResult.y + ")，点击");
+        click(bubbleResult.x + 5, bubbleResult.y + 5);
+        sleep(2000);
+        log("<<< gameRoomActions 完成");
+        return;
+    }
+
+    // 步骤2: 模板没找到，用 hp100_icon 兜底
     var hpResults = this.imageRecognition.findAllTemplates(screenshot, "hp100_icon");
     if (hpResults.length > 0) {
-        log("  [游戏房间] ✓ 找到 " + hpResults.length + " 个 hp100 冒泡，点击进入");
+        log("  [游戏房间] ✓ 找到 " + hpResults.length + " 个 hp100 冒泡，点击");
         this.clickAllPositions(hpResults);
         sleep(2000);
         log("<<< gameRoomActions 完成");
         return;
     }
 
-    // 步骤2: 模板没找到，通过右侧"邀请码"区域定位冒泡
-    var invitePos = this.imageRecognition.findTextPosition(screenshot, "邀请码", 0.6, null, false);
-    if (invitePos && invitePos.x > 0) {
-        // 冒泡在邀请码左侧
-        click(invitePos.x - 80, invitePos.y);
-        log("  [游戏房间] ✓ 通过'邀请码'定位点击冒泡 (" + (invitePos.x-80) + ", " + invitePos.y + ")");
-        sleep(2000);
-        log("<<< gameRoomActions 完成");
-        return;
-    }
-
-    // 步骤3: 都没找到，点击屏幕中部偏右的常见冒泡位置
+    // 步骤3: 都没找到，点击屏幕右侧常见冒泡位置
     click(Math.floor(screenshot.getWidth() * 0.88), Math.floor(screenshot.getHeight() * 0.55));
     log("  [游戏房间] 兜底：点击右侧冒泡区域");
     sleep(2000);
@@ -699,8 +725,8 @@ TaskManager.prototype.enterTeamFlow = function () {
 };
 
 /**
- * 高频点击最下方房间加入（15秒持续狂点）
- * 抢房成功后自动检测并关闭"方案配置"弹窗
+ * 高频点击最下方房间加入（30秒持续狂点）
+ * 中间每10秒识别一次场景，防止死循环
  * @param {Image} screenshot 当前截图
  */
 TaskManager.prototype._spamClickJoinButtons = function (screenshot) {
@@ -711,12 +737,11 @@ TaskManager.prototype._spamClickJoinButtons = function (screenshot) {
     var targetX = Math.floor(sw * 0.55);
     var targetY = Math.floor(sh * 0.700);
 
-    // 持续狂点15秒（每批20次 x 50ms = 1秒，循环15轮）
-    var durationMs = 15000;
+    var durationMs = 30000;
     var batchClicks = 20;
     var batchIntervalMs = 50;
     var endTime = Date.now() + durationMs;
-    var startTime = Date.now(); // 记录开始时间，用于定时检查
+    var startTime = Date.now();
     log("  [招募] 狂点最下方房间 (" + targetX + ", " + targetY + ")，持续" + (durationMs/1000) + "秒");
 
     while (Date.now() < endTime && this.isRunning) {
@@ -724,83 +749,64 @@ TaskManager.prototype._spamClickJoinButtons = function (screenshot) {
             click(targetX + random(-5, 5), targetY + random(-5, 5));
             sleep(batchIntervalMs);
         }
-        // 每5秒快速检查一次是否已进入真实战斗（仅用模板匹配，避免OCR误判"19级"等）
-        if ((Date.now() - startTime) % 5000 < batchClicks * batchIntervalMs) {
+        // 每10秒识别一次场景，防止死循环
+        if ((Date.now() - startTime) > 0 && (Date.now() - startTime) % 10000 < batchClicks * batchIntervalMs) {
             var quickCheck = this.imageRecognition.captureScreen();
             if (quickCheck) {
                 var quickText = this.imageRecognition.recognizeText(quickCheck);
                 quickCheck.recycle();
-                // 必须同时有波次 才算真正进入战斗（避免房间内"19级"误判）
+                // 检测到"波次"说明已进入战斗，停止抢房
                 if (quickText && quickText.indexOf("波次") >= 0) {
-                    log("  [招募] ✓ 检测到'波次'，已进入真实战斗，停止抢房！");
+                    log("  [招募] ✓ 检测到'波次'，已进入战斗，停止抢房");
+                    break;
+                }
+                // 检测到"邀请码"说明已进入别人房间，停止抢房
+                if (quickText && quickText.indexOf("邀请码") >= 0) {
+                    log("  [招募] ✓ 检测到'邀请码'，已进入房间，停止抢房");
                     break;
                 }
             }
         }
     }
 
-    toast("已尝试加入！");
-
-    // 抢房后检测是否弹出"寰球救援方案"配置弹窗，用X按钮关闭
-    sleep(800);
-    var afterScreenshot = this.imageRecognition.captureScreen();
-    if (afterScreenshot) {
-        var closeResult = this.imageRecognition.matchTemplate(afterScreenshot, "close_plan_x", 0.7);
-        if (closeResult.found) {
-            log("  [招募] ✓ 检测到'方案配置'弹窗，点击X关闭: (" + closeResult.x + ", " + closeResult.y + ")");
-            click(closeResult.x, closeResult.y);
-            toast("已关闭配置弹窗");
-        } else {
-            log("  [招募] 未检测到方案配置弹窗");
-        }
-        afterScreenshot.recycle();
-    }
-
     log("<<< _spamClickJoinButtons 完成");
 };
 
 /**
- * 招募频道操作 - 在组队频道中切换到招募tab，查找并加入别人的寰球救援房间
- * 核心原则：自己不开房（费道具），只抢别人房间加入
- * 流程: 确认在招募tab(精英/更改等特征词) → 高频点击加入
- * 注意: 如果进入GAME_ROOM，由状态机自动切换到gameRoomActions处理
+ * 组队频道操作 - 点击招募tab切换到招募频道
+ * 组队频道包含：组队频道tab、世界频道tab
+ * 需要切换到招募tab才能抢房
  */
 TaskManager.prototype.teamHallActions = function (screenshot) {
-    log(">>> 执行 teamHallActions: 招募频道查找房间");
+    log(">>> 执行 teamHallActions: 点击招募tab");
 
-    var text = this.imageRecognition.recognizeText(screenshot);
-    log("  [招募] OCR文字(" + (text||"").length + "字): " + (text || "(空)").substring(0, 200));
-
-    // ========== 步骤1: 确认是否已在招募tab页面 ==========
-    var isOnRecruitTab = this._isOnRecruitTab(text);
-
-    if (!isOnRecruitTab) {
-        log("  [招募] 未检测到招募tab特征，尝试切换到招募...");
-
-        // 1a: 模板匹配优先找"招募"tab（左侧菜单灰色文字）
-        var recruitResult = this.imageRecognition.matchTemplate(screenshot, "recruit_tab", 0.7);
-        if (recruitResult.found) {
-            log("  [招募] ✓ 模板匹配到'recruit_tab': (" + recruitResult.x + ", " + recruitResult.y + ")，点击切换");
-            this.smartClick(recruitResult.x + 10, recruitResult.y + 15);
-            sleep(1500);
-            return;
-        }
-
-        // 1b: 降级OCR找"招募"文字（不用lightText避免崩溃）
-        var recruitTabPos = this.imageRecognition.findTextPosition(screenshot, "招募", 0.7, null, false);
-        if (recruitTabPos && recruitTabPos.x > 0) {
-            log("  [招募] ✓ OCR找到'招募'tab: (" + recruitTabPos.x + ", " + recruitTabPos.y + ")，点击切换");
-            this.smartClick(recruitTabPos.x, recruitTabPos.y);
-            sleep(1500);
-            return;
-        }
-
-        log("  [招募] ✗ 未找到'招募'tab（模板+OCR均失败）");
+    // 模板匹配优先找"招募"tab
+    var recruitResult = this.imageRecognition.matchTemplate(screenshot, "recruit_tab", 0.7);
+    if (recruitResult.found) {
+        log("  [组队频道] ✓ 模板匹配到'recruit_tab': (" + recruitResult.x + ", " + recruitResult.y + ")，点击切换");
+        this.smartClick(recruitResult.x + 10, recruitResult.y + 15);
+        sleep(1500);
         return;
     }
 
-    // ========== 步骤2: 已确认在招募tab → 直接按坐标抢房 ==========
-    log("  [招募] ✓ 已在招募tab，直接抢房！(优先最下方房间)");
+    // 降级OCR找"招募"文字
+    var recruitTabPos = this.imageRecognition.findTextPosition(screenshot, "招募", 0.7, null, false);
+    if (recruitTabPos && recruitTabPos.x > 0) {
+        log("  [组队频道] ✓ OCR找到'招募': (" + recruitTabPos.x + ", " + recruitTabPos.y + ")，点击切换");
+        this.smartClick(recruitTabPos.x, recruitTabPos.y);
+        sleep(1500);
+        return;
+    }
+
+    log("  [组队频道] ✗ 未找到'招募'tab（模板+OCR均失败）");
+};
+
+/**
+ * 招募频道操作 - 疯狂点击抢房
+ * 已确认在招募频道，直接高频点击加入按钮
+ */
+TaskManager.prototype.recruitChannelActions = function (screenshot) {
+    log(">>> 执行 recruitChannelActions: 疯狂抢房");
     this._spamClickJoinButtons(screenshot);
 };
 

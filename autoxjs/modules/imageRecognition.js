@@ -22,11 +22,22 @@ var SCENE_RULES = [
         templates: ["complete_turn_icon"]
     },
     {
+        // 组队频道（冒泡点击后进入，包含组队/世界频道tab）
+        // 动作：点击招募tab切换到招募频道
         scene: "TEAM_HALL",
         priority: 0,
-        ocrKeywords: ["招募频道", "组队频道"],
+        ocrKeywords: ["组队频道", "世界频道", "配置分享", "军团频道", "征途频道"],
         minMatch: 1,
         templates: ["team_hall_tag"]
+    },
+    {
+        // 招募频道（组队频道里点击招募tab后进入）
+        // 动作：疯狂点击抢房
+        scene: "RECRUIT_CHANNEL",
+        priority: 0,
+        ocrKeywords: ["招募频道"],
+        minMatch: 1,
+        templates: ["recruit_tab"]
     },
     {
         scene: "TRAINING_HALL",
@@ -50,11 +61,27 @@ var SCENE_RULES = [
         templates: ["main_menu", "core_menu", "legion_menu", "charactpr_menu", "mall_menu"]
     },
     {
+        // 已加入房间，等待房主开始游戏
+        // 特征：有"等待开始"、"开始后消耗"等文字
+        // 动作：等待5秒，让状态机重新识别
+        scene: "WAITING_START",
+        priority: 3,
+        ocrKeywords: ["等待开始", "开始后消耗", "房主", "准备中"],
+        minMatch: 1,
+        templates: []
+    },
+    {
         scene: "GAME_ROOM",
         priority: 4,
-        ocrKeywords: ["救援-难度", "寰球救援-难度", "环球救援-难度", "豪球救援-难度"],
-        minMatch: 1,
-        // 组合规则：多个词必须同时出现才算匹配
+        // OCR经常把"-"识别成"一"，所以两种变体都加
+        ocrKeywords: [
+            "救援-难度", "寰球救援-难度", "环球救援-难度", "豪球救援-难度",
+            "救援一难度", "寰球救援一难度", "环球救援一难度", "豪球救援一难度",
+            "输入邀请码", "开始游戏"
+        ],
+        minMatch: 2,
+        // 排除词：招募/组队频道里的"救援-难度"是房间列表，不是游戏房间
+        excludeKeywords: ["招募频道", "组队频道", "世界频道"],
         combinedRules: [
             { keywords: ["输入邀请码", "开始游戏"], requireAll: true },
         ],
@@ -69,9 +96,9 @@ var SCENE_RULES = [
         scene: "JINGYING_BATTLE",
         priority: 5,
         requireTemplate: true,  // 暂停按钮 || 必须先命中，再匹配OCR
-        ocrKeywords: ["波次", "级"],
+        ocrKeywords: ["波次", "级", "1000"],
         minMatch: 1,
-        excludeKeywords: ["难度", "寰球救援", "环球救援", "豪球救援", "寰球远征"],
+        excludeKeywords: ["难度", "球救援", "球远征"],
         templates: ["in_battle"]
     },
     {
@@ -82,7 +109,7 @@ var SCENE_RULES = [
         scene: "HUANQIU_BATTLE",
         priority: 6,
         requireTemplate: true,  // 暂停按钮 || 必须先命中，再匹配OCR
-        ocrKeywords: ["寰球救援-难度", "环球救援-难度", "豪球救援-难度", "每10秒", "释放", "技能"],
+        ocrKeywords: ["球救援-难度", "环球救援-难度", "豪球救援-难度", "1000", "级", "球救援一难度", "环球救援一难度", "豪球救援一难度"],
         minMatch: 1,
         templates: ["in_battle"]
     }
