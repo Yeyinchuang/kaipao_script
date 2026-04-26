@@ -133,15 +133,23 @@ TaskManager.prototype.getCurrentState = function () {
     var stateMap = {
         "IDLE": "待机",
         "INIT": "初始化",
-        "MAIN_MENU": "主菜单",
-        "BASE_MENU": "基地",
+        // 主菜单各tab（独立场景）
+        "MAIN_MENU_BASE": "主菜单-基地",
+        "MAIN_MENU_ARMY": "主菜单-军团",
+        "MAIN_MENU_CORE": "主菜单-核心",
+        "MAIN_MENU_ROLE": "主菜单-角色",
+        "MAIN_MENU_SHOP": "主菜单-商城",
+        "MAIN_MENU_JOURNEY": "主菜单-征途",
+        "MAIN_MENU_BATTLE": "主菜单-战斗",
+        // 其他
         "TRAINING_HALL": "历练大厅",
-        "GAME_ROOM": "游戏房间",
+        "HUANQIU_ROOM": "寰球房间",
         "WAITING_START": "等待开始",
         "TEAM_HALL": "组队频道",
         "RECRUIT_CHANNEL": "招募频道",
-        "BATTLE": "战斗中",
-        "GLOBAL_EXPEDITION": "环球远征"
+        "IN_BATTLE": "战斗中",
+        "BATTLE_COMPLETE_TURN": "结算完成",
+        "BATTLE_QUIT": "退出结算"
     };
     return stateMap[this.currentState] || this.currentState;
 };
@@ -168,18 +176,37 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
             this._switchState(sceneType, currentTime);
             break;
 
-        // ==================== MAIN_MENU ====================
-        case "MAIN_MENU":
-            if (this._tryFollowScene(sceneType, currentTime, ["COMPLETE_TURN"])) return;
-            if (sceneType === "MAIN_MENU") {
+        // ==================== MAIN_MENU_* (各导航栏tab独立场景) ====================
+        // 已在基地tab → 直接点历练大厅；在其他tab → 先切到基地
+        case "MAIN_MENU_BASE":
+        case "MAIN_MENU_ARMY":
+        case "MAIN_MENU_CORE":
+        case "MAIN_MENU_ROLE":
+        case "MAIN_MENU_SHOP":
+        case "MAIN_MENU_JOURNEY":
+        case "MAIN_MENU_BATTLE":
+            if (this._tryFollowScene(sceneType, currentTime, ["BATTLE_COMPLETE_TURN", "TRAINING_HALL"])) return;
+
+            // 判断当前是否在基地tab（只有基地tab才直接点历练大厅）
+            var isOnBaseTab = (this.currentState === "MAIN_MENU_BASE" && sceneType === "MAIN_MENU_BASE");
+
+            if (isOnBaseTab) {
+                // 已在基地 → 点历练大厅进入训练大厅
                 if (this._shouldRetryAction(currentTime, 5000)) {
-                    toast("✓ 识别到主菜单，点击基地");
+                    toast("✓ 在基地，点历练大厅");
                     this.mainMenuActions();
                 }
-            } else if (currentTime - this.lastStateChangeTime > 15000) {
-                log("  [状态机] MAIN_MENU 超时15s，处理超时");
-                toast("⏰ 主菜单检测超时，重试");
-                this._handleTimeoutAndReset(currentTime, "MAIN_MENU");
+            } else if (sceneType.indexOf("MAIN_MENU") >= 0) {
+                // 在其他tab → 点击基地tab切换过去
+                if (this._shouldRetryAction(currentTime, 3000)) {
+                    log("  [状态机] 当前在 " + this.currentState + "，点击基地tab");
+                    this.clickTemplate("click/main_menu/click_main_menu_base");
+                }
+            }
+
+            if (currentTime - this.lastStateChangeTime > 15000) {
+                log("  [状态机] 主菜单超时15s，重试");
+                this._handleTimeoutAndReset(currentTime, "MAIN_MENU_BASE");
             }
             break;
 
@@ -211,16 +238,16 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
             }
             break;
 
-        // ==================== GAME_ROOM ====================
-        case "GAME_ROOM":
-            if (this._tryFollowScene(sceneType, currentTime, ["TEAM_HALL", "WAITING_START", "JINGYING_BATTLE", "HUANQIU_BATTLE", "COMPLETE_TURN"])) return;
-            if (sceneType === "GAME_ROOM") {
+        // ==================== HUANQIU_ROOM (寰球救援房间) ====================
+        case "HUANQIU_ROOM":
+            if (this._tryFollowScene(sceneType, currentTime, ["TEAM_HALL", "WAITING_START", "IN_BATTLE", "BATTLE_COMPLETE_TURN"])) return;
+            if (sceneType === "HUANQIU_ROOM") {
                 if (this._shouldRetryAction(currentTime, 5000)) {
-                    toast("✓ 游戏房间，点击冒泡");
+                    toast("✓ 寰球房间，点击冒泡");
                     this.gameRoomActions(screenshot);
                 }
             } else if (currentTime - this.lastStateChangeTime > 25000) {
-                log("  [状态机] GAME_ROOM 超时25s，处理超时");
+                log("  [状态机] HUANQIU_ROOM 超时25s，处理超时");
                 this._handleTimeoutAndReset(currentTime, "MAIN_MENU");
             }
             break;
@@ -263,25 +290,16 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
             }
             break;
 
-        // ==================== BATTLE ====================
-        case "BATTLE":
-            // 首次进入BATTLE状态，记录开始时间
+        // ==================== IN_BATTLE (战斗中) ====================
+        case "IN_BATTLE":
+            // 首次进入IN_BATTLE状态，记录开始时间
             if (this.battleStartTime === 0) {
                 this.battleStartTime = Date.now();
                 log("  [状态机] 战斗计时开始: " + new Date().toLocaleTimeString());
             }
 
-            if (sceneType === "JINGYING_BATTLE") {
-                // ===== 精英战斗（非目标）→ 直接退出 =====
-                var eliteElapsed = Date.now() - this.battleStartTime;
-                log("  [状态机] ⚠ 检测到精英战斗(JINGYING_BATTLE)，立即退出！(" + Math.round(eliteElapsed / 1000) + "s)");
-                toast("⚠ 误入精英战斗，正在退出...");
-                this._exitUnwantedBattle(screenshot);
-                this.battleStartTime = 0;
-                this._switchState("TEAM_HALL", currentTime);
-
-            } else if (sceneType === "HUANQIU_BATTLE") {
-                // ===== 寰球救援战斗（目标）→ 正常打 =====
+            if (sceneType === "IN_BATTLE") {
+                // ===== 正常战斗中（寰球救援/精英战斗统一处理）=====
                 var battleElapsed = Date.now() - this.battleStartTime;
                 // 超时保护：超过10分钟也退出
                 if (battleElapsed > 600000) {
@@ -292,37 +310,29 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
                     this._switchState("TEAM_HALL", currentTime);
                     break;
                 }
-                // OCR识别战斗界面文字（复用于时间解析）
                 var battleText = this.imageRecognition.recognizeText(screenshot);
-                if (battleText) {
-                    var timeMatch = battleText.match(/(\d{1,2})[:：](\d{2})/);
-                    if (timeMatch) {
-                        log("  [战斗] 已用时: " + timeMatch[1] + ":" + timeMatch[2] +
-                            " (后台计: " + Math.round(battleElapsed / 1000) + "s)");
-                    }
-                }
-                log("  [状态机] 正常战斗中（寰球救援），执行 battleActions");
+                log("  [状态机] 正常战斗中，执行 battleActions");
                 this.battleActions(screenshot, battleText);
 
-            } else if (sceneType === "COMPLETE_TURN") {
-                // 战斗结束出结算 → 切到COMPLETE_TURN状态
-                log("  [状态机] BATTLE中检测到结算页 -> 切到 COMPLETE_TURN");
+            } else if (sceneType === "BATTLE_COMPLETE_TURN") {
+                // 战斗结束出结算 → 切到BATTLE_COMPLETE_TURN状态
+                log("  [状态机] IN_BATTLE中检测到结算页 -> 切到 BATTLE_COMPLETE_TURN");
                 toast("⚡ 战斗结束，进入结算处理");
                 this.battleStartTime = 0;
-                this._switchState("COMPLETE_TURN", currentTime);
+                this._switchState("BATTLE_COMPLETE_TURN", currentTime);
             } else if (currentTime - this.lastStateChangeTime > 60000) {
-                log("  [状态机] BATTLE 超时60s，处理战斗超时");
+                log("  [状态机] IN_BATTLE 超时60s，处理战斗超时");
                 this.handleBattleTimeout();
             } else {
-                // 战斗中但场景不是JINGYING_BATTLE/HUANQIU_BATTLE（可能是弹窗等短暂遮挡），跟随场景
-                log("  [状态机] BATTLE状态但场景为 " + sceneType + "，跟随切换");
+                // 场景变了（弹窗等短暂遮挡），跟随切换
+                log("  [状态机] IN_BATTLE状态但场景为 " + sceneType + "，跟随切换");
                 this._switchState(sceneType, currentTime);
             }
             break;
 
-        // ==================== COMPLETE_TURN ====================
-        case "COMPLETE_TURN":
-            if (sceneType === "COMPLETE_TURN") {
+        // ==================== BATTLE_COMPLETE_TURN (结算完成) ====================
+        case "BATTLE_COMPLETE_TURN":
+            if (sceneType === "BATTLE_COMPLETE_TURN") {
                 if (this._shouldRetryAction(currentTime, 3000)) {
                     toast("⚡ 战斗结算完成，点击返回");
                     this.handleCompleteTurn();
@@ -350,9 +360,14 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
             break;
 
         // ==================== default ====================
-        // 其他未知状态，跟随场景
+        // 其他未知状态：尝试关闭弹窗，然后跟随场景
         default:
             if (sceneType && sceneType !== this.currentState) {
+                // 先尝试关闭可能的弹窗（X按钮）
+                if (this.clickTemplate("common/close_tag") || this.clickTemplate("click/click_close")) {
+                    log("  [状态机] 默认: 关闭弹窗后保持当前状态");
+                    break;
+                }
                 log("  [状态机] 默认: " + this.currentState + " -> " + sceneType);
                 this._switchState(sceneType, currentTime);
             }
@@ -375,7 +390,7 @@ TaskManager.prototype._tryFollowScene = function (sceneType, currentTime, extraA
     if (sceneType === this.currentState) return false;
 
     // 特殊场景在任何状态下都优先跟随（全局拦截）
-    var globalInterceptScenes = ["COMPLETE_TURN"];
+    var globalInterceptScenes = ["BATTLE_COMPLETE_TURN", "BATTLE_QUIT"];
     for (var i = 0; i < globalInterceptScenes.length; i++) {
         if (sceneType === globalInterceptScenes[i]) {
             log("  [状态机] 全局拦截: " + sceneType + " -> 跟随切换");
@@ -448,27 +463,39 @@ TaskManager.prototype._handleTimeoutAndReset = function (currentTime, fallbackSt
 // ==================== 各状态操作 ====================
 
 /**
- * 通过 OCR 文字点击（优先），降级为模板点击
+ * 纯模板点击（原OCR文字点击已废弃）
+ * 直接用 fallbackTemplate 模板匹配并点击
  */
 TaskManager.prototype.clickByText = function (targetText, fallbackTemplate, region) {
-    log("  [操作] 尝试点击文字: '" + targetText + "' (降级模板: " + fallbackTemplate + ")");
-    var screenshot = this.imageRecognition.captureScreen();
+    log("  [操作] 点击(纯模板): '" + targetText + "' → 模板: " + fallbackTemplate + "");
+    if (!fallbackTemplate) {
+        log("  [操作] ✗ 无降级模板，跳过");
+        return false;
+    }
+    return this.clickTemplate(fallbackTemplate);
+};
+
+/**
+ * 模板点击 - 可传入截图对象复用（不重新截图）
+ */
+TaskManager.prototype.clickTemplate = function (templateName, existingScreenshot) {
+    var screenshot = existingScreenshot || this.imageRecognition.captureScreen();
     if (!screenshot) {
-        log("  [操作] 截图失败，无法点击文字");
+        log("  [操作] ✗ 截图失败，无法匹配模板: " + templateName);
         return false;
     }
 
-    var pos = this.imageRecognition.findTextPosition(screenshot, targetText, 0.7, region);
-    if (pos && pos.x > 0 && pos.y > 0) {
-        log("  [操作] ✓ OCR找到文字[" + targetText + "]，位置: (" + pos.x + ", " + pos.y + ")");
-        this.smartClick(pos.x, pos.y);
-        screenshot.recycle();
+    var result = this.imageRecognition.matchTemplate(screenshot, templateName, this.imageRecognition.templateThreshold);
+    if (result.found) {
+        log("  [操作] ✓ 模板匹配成功: " + templateName + " (" + result.x + ", " + result.y + ")");
+        this.smartClick(result.x, result.y);
+        if (!existingScreenshot) screenshot.recycle();
         return true;
     }
 
-    log("  [操作] ✗ OCR未找到'" + targetText + "'，降级到模板: " + fallbackTemplate);
-    screenshot.recycle();
-    return this.clickTemplate(fallbackTemplate);
+    log("  [操作] ✗ 模板未匹配: " + templateName);
+    if (!existingScreenshot) screenshot.recycle();
+    return false;
 };
 
 /**
@@ -476,68 +503,25 @@ TaskManager.prototype.clickByText = function (targetText, fallbackTemplate, regi
  * 策略优先级: 1.当前截图OCR找"基地"  2.模板匹配base_icon  3.导航栏坐标估算
  */
 TaskManager.prototype.mainMenuActions = function () {
-    log(">>> 执行 mainMenuActions: 进入基地");
-    toast("操作: 进入基地");
+    log(">>> 执行 mainMenuActions: 点历练大厅");
+    toast("操作: 点历练大厅");
 
-    var screenshot = this.imageRecognition.captureScreen();
-    if (!screenshot) {
-        log("  [主菜单] 截图失败，跳过");
+    // 直接用模板点击历练大厅按钮
+    if (this.clickTemplate("click/menu_base/click_training_hall")) {
+        log("  [主菜单] ✓ 点击历练大厅模板成功");
+        sleep(2000);
         return;
     }
 
-    var clicked = false;
-    var sw = device.width || 720;
-    var sh = device.height || 1280;
-
-    // 策略1: 在底部导航栏区域查找"基地"（限制区域避免全屏其他文字干扰）
-    // 导航栏在底部约10%-20%范围
-    var navRegion = {
-        x: Math.floor(sw * 0.1), y: Math.floor(sh * 0.88),
-        width: Math.floor(sw * 0.8), height: Math.floor(sh * 0.12)
-    };
-    log("  [主菜单] 导航栏搜索区域: x=" + navRegion.x + ", y=" + navRegion.y +
-        ", w=" + navRegion.width + ", h=" + navRegion.height);
-
-    // OCR可能把"基地"识别成"其地"，尝试多种写法
-    // 注意：只用raw(原始彩色图)和normal预处理，不用lightText(会崩溃)
-    var baseVariants = ["基地", "其地"];
-    for (var bi = 0; bi < baseVariants.length && !clicked; bi++) {
-        // 先用缓存查找
-        var pos = this.imageRecognition.findTextPosition(screenshot, baseVariants[bi], 0.6, navRegion, false);
-        if (pos && pos.x > 0 && pos.y > 0) {
-            log("  [主菜单] ✓ OCR找到'" + baseVariants[bi] + "', 位置: (" + pos.x + ", " + pos.y + ")");
-            this.smartClick(pos.x, pos.y);
-            clicked = true;
-        }
-        // 不再逐个尝试所有preprocessing模式，太慢且lightText崩溃
-        // 如果raw没找到就跳过这个variant，直接到下一步策略
+    // 兜底：OCR查找"历练大厅"
+    var screenshot = this.imageRecognition.captureScreen();
+    if (!screenshot) return;
+    if (this.clickByText("历练大厅", "click/menu_base/click_training_hall")) {
+        log("  [主菜单] ✓ OCR找到'历练大厅'");
+        sleep(2000);
+    } else {
+        toast("未找到历练大厅按钮");
     }
-    if (!clicked) {
-        log("  [主菜单] ✗ OCR未找到'基地'(阈值0.6, 区域搜索)");
-    }
-    screenshot.recycle();
-
-    // 策略2: 模板匹配 base_icon
-    if (!clicked) {
-        clicked = this.clickTemplate("base_icon");
-        if (clicked) {
-            log("  [主菜单] ✓ 模板base_icon匹配成功");
-        } else {
-            log("  [主菜单] ✗ 模板base_icon未匹配");
-        }
-    }
-
-    // 策略3: 坐标兜底 - 导航栏底部，"基地"是第5个(共7个)
-    if (!clicked) {
-        var navY = Math.floor(sh * 0.93);
-        var navX = Math.floor(sw * 0.58); // 基地大约在导航栏中间偏右
-        log("  [主菜单] 使用坐标兜底点击基地: (" + navX + ", " + navY + ")");
-        click(navX, navY);
-        sleep(this.opSettings.clickDelay);
-    }
-
-    log("<<< mainMenuActions 完成");
-    sleep(2000);
 };
 
 /**
@@ -549,7 +533,7 @@ TaskManager.prototype.baseMenuActions = function (screenshot) {
     toast("操作: 进入历练大厅");
 
     // 策略1: 直接全屏OCR查找"历练大厅"（不限区域）
-    if (this.clickByText("历练大厅", "training_hall_icon")) {
+    if (this.clickByText("历练大厅", "click/menu_base/click_training_hall")) {
         log("<<< baseMenuActions 完成 (直接点击)");
         sleep(2000);
         return;
@@ -564,94 +548,70 @@ TaskManager.prototype.baseMenuActions = function (screenshot) {
         var newScreenshot = this.imageRecognition.captureScreen();
         if (!newScreenshot) continue;
 
-        // 滑动后再用全屏OCR找
-        var pos = this.imageRecognition.findTextPosition(newScreenshot, "历练大厅", 0.6);
-        if (pos && pos.x > 0 && pos.y > 0) {
-            log("  [基地] 滑动后找到'历练大厅', 位置: (" + pos.x + ", " + pos.y + ")");
-            this.smartClick(pos.x, pos.y);
-            newScreenshot.recycle();
-            log("<<< baseMenuActions 完成 (滑动后点击)");
+        // 滑动后再找
+        if (this.clickByText("历练大厅", "click/menu_base/click_training_hall")) {
+            log("<<< baseMenuActions 完成 (直接点击)");
             sleep(2000);
             return;
         }
         newScreenshot.recycle();
     }
-
-    // 策略3: OCR始终找不到，降级模板匹配
-    log("  [基地] 滑动后仍未找到，降级模板匹配");
-    this.clickTemplate("training_hall_icon");
-    log("<<< baseMenuActions 完成 (模板兜底)");
     sleep(2000);
 };
 
 /**
- * 历练大厅操作 - 查找寰球救援并进入
- * 优化：复用 detectScene 的OCR缓存，避免重复调用 paddle.ocr()
+ * 历练大厅操作 - 模板优先：找寰球救援标题 → 在其下方点挑战按钮
+ * 速度：纯模板匹配 <50ms（vs OCR 方案 5-10秒）
+ *
+ * 流程：
+ *   1. 模板匹配 "寰球救援" 标题 → 获得坐标
+ *   2. 在标题下方区域匹配 "挑战" 按钮模板 → 点击
+ *   3. 标题没找到 → 降级 OCR
+ *
+ * 需要的模板（放在 scene/training_hall/ 目录下）：
+ *   - huanqiu_title.png : "寰球救援?" 标题区域截图
+ *   - challenge_btn.png  : 橙色"挑战"按钮截图
  */
 TaskManager.prototype.trainingHallActions = function (screenshot) {
-    log(">>> 执行 trainingHallActions: 查找寰球救援");
+    log(">>> 执行 trainingHallActions: 查找寰球救援(模板优先)");
     toast("操作: 查找寰球救援");
 
-    var screenHeight = screenshot.getHeight();
-    var screenWidth = screenshot.getWidth();
+    var sw = screenshot.getWidth();
+    var sh = screenshot.getHeight();
 
-    // 步骤1：获取全屏文字（优先用缓存，零额外开销）
-    var trainingText = this.imageRecognition.recognizeTextInRegion(screenshot, null, false);
-    log("训练大厅文字(" + (trainingText||"").length + "字): " + (trainingText || "").substring(0, 200));
+    // ========== 步骤1: 模板匹配"寰球救援"标题区域 ==========
+    var titleResult = this.imageRecognition.matchTemplate(screenshot, "click/training_hall/click_huanqiu_title", 0.7);
 
-    // 兼容"寰球救援"和"环球救援"
-    if ((trainingText || "").indexOf("寰球救援") >= 0 || (trainingText || "").indexOf("环球救援") >= 0) {
-        log("找到寰球/环球救援文字，定位位置并点击挑战按钮");
+    if (titleResult.found) {
+        log("  [历练大厅] ✓ 找到'寰球救援'标题: (" + titleResult.x + ", " + titleResult.y + ")");
 
-        // 步骤2: 从缓存查找"寰球救援"坐标（零额外OCR！）
-        // findTextPosition 现在会先查 _ocrBlocks 缓存，命中则直接返回坐标
-        var rescuePos = this.imageRecognition.findTextPosition(screenshot, "寰球救援", 0.6);
-        if (!rescuePos || rescuePos.x <= 0) {
-            rescuePos = this.imageRecognition.findTextPosition(screenshot, "环球救援", 0.6);
+        // ========== 步骤2: 在标题下方匹配"挑战"按钮 ==========
+        // 裁剪搜索区域（标题y+40 到 y+260），局部匹配更快
+        var searchTop = titleResult.y + 40;
+        var searchBottom = Math.min(titleResult.y + 260, sh);
+        var searchImg = images.clip(screenshot, 0, searchTop, sw, searchBottom - searchTop);
+        var btnResult = this.imageRecognition.matchTemplate(searchImg, "click/training_hall/click_challenge_btn", 0.75);
+
+        if (btnResult.found) {
+            var clickX = btnResult.x;
+            var clickY = searchTop + btnResult.y; // 还原为全屏坐标
+            log("  [历练大厅] ✓ 找到'挑战'按钮: (" + clickX + ", " + clickY + ")");
+            this.smartClick(clickX, clickY);
+            searchImg.recycle();
+            sleep(2000);
+            log("<<< trainingHallActions 完成（模板成功）");
+            return;
         }
 
-        if (rescuePos && rescuePos.x > 0 && rescuePos.y > 0) {
-            log("  [历练大厅] 寰球救援位置: (" + rescuePos.x + ", " + rescuePos.y + ")");
-
-            // 步骤3: 在寰球救援卡片区域内搜索"挑战"按钮
-            // 寻找 y > rescuePos.y 且最近的"挑战"文字（在卡片右下角）
-            var challengePos = this._findChallengeBelow(rescuePos.y, screenWidth, screenHeight);
-            if (challengePos) {
-                this.smartClick(challengePos.x, challengePos.y);
-                log("  [历练大厅] ✓ 点击挑战按钮 (" + challengePos.x + ", " + challengePos.y + ")");
-            } else {
-                log("  [历练大厅] 未找到挑战按钮，降级模板");
-                this.clickTemplate("challenge_icon");
-            }
-        } else {
-            log("  [历练大厅] 无法定位寰球救援坐标");
-            this.clickByText("挑战", "challenge_icon");
-        }
-        sleep(3000);
-    } else {
-        // 尝试滚动查找
-        log("未找到寰球救援文字，尝试滚动");
-        for (var i = 0; i < 3; i++) {
-            this.smartScroll("down", 400);
-            sleep(1000);
-
-            var newScreenshot = this.imageRecognition.captureScreen();
-            if (newScreenshot) {
-                // 全屏搜索（不限制区域）
-                var newText = this.imageRecognition.recognizeTextInRegion(newScreenshot, null, false);
-                if ((newText || "").indexOf("寰球救援") >= 0 || (newText || "").indexOf("环球救援") >= 0) {
-                    log("滚动后找到寰球救援");
-                    this.clickByText("挑战", "challenge_icon");
-                    newScreenshot.recycle();
-                    sleep(3000);
-                    return;
-                }
-                newScreenshot.recycle();
-            }
-        }
-        log("多次滚动后仍未找到寰球救援");
-        this.backButtonClick();
+        searchImg.recycle();
+        log("  [历练大厅] 标题找到但挑战按钮未命中，坐标兜底点击");
+        // 兜底：挑战按钮在卡片右中部
+        this.smartClick(sw * 0.65, titleResult.y + 180);
+        sleep(2000);
+        log("<<< trainingHallActions 完成（坐标兜底）");
+        return;
     }
+    log("<<< trainingHallActions 完成");
 };
 
 /**
@@ -662,8 +622,8 @@ TaskManager.prototype.gameRoomActions = function (screenshot) {
     log(">>> 执行 gameRoomActions: 点击冒泡进入组队");
     toast("操作: 点击冒泡进入");
 
-    // 步骤1: 点击聊天冒泡图标（chat_bubble_icon 模板）
-    var bubbleResult = this.imageRecognition.matchTemplate(screenshot, "chat_bubble_icon", 0.7);
+    // 步骤1: 点击聊天冒泡图标（click_chat_bubble 模板）
+    var bubbleResult = this.imageRecognition.matchTemplate(screenshot, "click/huanqiu_room/click_chat_bubble", 0.7);
     if (bubbleResult.found) {
         log("  [游戏房间] ✓ 找到冒泡图标: (" + bubbleResult.x + ", " + bubbleResult.y + ")，点击");
         click(bubbleResult.x + 5, bubbleResult.y + 5);
@@ -672,8 +632,8 @@ TaskManager.prototype.gameRoomActions = function (screenshot) {
         return;
     }
 
-    // 步骤2: 模板没找到，用 hp100_icon 兜底
-    var hpResults = this.imageRecognition.findAllTemplates(screenshot, "hp100_icon");
+    // 步骤2: 模板没找到，用 findAllTemplates 兜底
+    var hpResults = this.imageRecognition.findAllTemplates(screenshot, "click/huanqiu_room/click_chat_bubble");
     if (hpResults.length > 0) {
         log("  [游戏房间] ✓ 找到 " + hpResults.length + " 个 hp100 冒泡，点击");
         this.clickAllPositions(hpResults);
@@ -698,7 +658,7 @@ TaskManager.prototype.enterTeamFlow = function () {
     var screenshot = this.imageRecognition.captureScreen();
     if (!screenshot) return false;
 
-    var teamHallResult = this.imageRecognition.matchTemplate(screenshot, "team_hall_icon", 0.8);
+    var teamHallResult = this.imageRecognition.matchTemplate(screenshot, "scene/huanqiu_room/scene_huanqiu_room1", 0.8); // 寰球救援入口
     if (teamHallResult.found) {
         log("检测到组队大厅图标，点击进入");
         this.smartClick(teamHallResult.x + 5, teamHallResult.y + 5);
@@ -709,7 +669,7 @@ TaskManager.prototype.enterTeamFlow = function () {
             var newScreenshot = this.imageRecognition.captureScreen();
             if (!newScreenshot) continue;
 
-            var quickJoinResult = this.imageRecognition.matchTemplate(newScreenshot, "quick_join_icon", 0.8);
+            var quickJoinResult = this.imageRecognition.matchTemplate(newScreenshot, "click/huanqiu_room/click_chat_bubble", 0.8);
             newScreenshot.recycle();
             if (quickJoinResult.found) {
                 log("检测到快速加入按钮，点击加入");
@@ -749,22 +709,24 @@ TaskManager.prototype._spamClickJoinButtons = function (screenshot) {
             click(targetX + random(-5, 5), targetY + random(-5, 5));
             sleep(batchIntervalMs);
         }
-        // 每10秒识别一次场景，防止死循环
+        // 每10秒用模板快速检查是否已进入战斗/房间（避免死循环）
         if ((Date.now() - startTime) > 0 && (Date.now() - startTime) % 10000 < batchClicks * batchIntervalMs) {
             var quickCheck = this.imageRecognition.captureScreen();
             if (quickCheck) {
-                var quickText = this.imageRecognition.recognizeText(quickCheck);
+                // 模板检测：战斗暂停按钮 → 已在战斗中 → 停止
+                if (this.imageRecognition.matchTemplate(quickCheck, "scene/battle/scene_in_battle", 0.75).found) {
+                    log("  [招募] ✓ 模板检测到战斗暂停按钮，已进入战斗，停止抢房");
+                    quickCheck.recycle();
+                    break;
+                }
+                // 模板检测：游戏房间特征 → 已进入房间 → 停止
+                if (this.imageRecognition.matchTemplate(quickCheck, "scene/huanqiu_room/scene_huanqiu_room1", 0.7).found
+                    || this.imageRecognition.matchTemplate(quickCheck, "scene/huanqiu_room/scene_huanqiu_room", 0.7).found) {
+                    log("  [招募] ✓ 模板检测到寰球房间特征，可能已进入房间，停止抢房");
+                    quickCheck.recycle();
+                    break;
+                }
                 quickCheck.recycle();
-                // 检测到"波次"说明已进入战斗，停止抢房
-                if (quickText && quickText.indexOf("波次") >= 0) {
-                    log("  [招募] ✓ 检测到'波次'，已进入战斗，停止抢房");
-                    break;
-                }
-                // 检测到"邀请码"说明已进入别人房间，停止抢房
-                if (quickText && quickText.indexOf("邀请码") >= 0) {
-                    log("  [招募] ✓ 检测到'邀请码'，已进入房间，停止抢房");
-                    break;
-                }
             }
         }
     }
@@ -780,25 +742,16 @@ TaskManager.prototype._spamClickJoinButtons = function (screenshot) {
 TaskManager.prototype.teamHallActions = function (screenshot) {
     log(">>> 执行 teamHallActions: 点击招募tab");
 
-    // 模板匹配优先找"招募"tab
-    var recruitResult = this.imageRecognition.matchTemplate(screenshot, "recruit_tab", 0.7);
+    // 模板匹配优先找"招募"tab图标
+    var recruitResult = this.imageRecognition.matchTemplate(screenshot, "click/bubble_chat/click_recruit_tab", 0.7);
     if (recruitResult.found) {
-        log("  [组队频道] ✓ 模板匹配到'recruit_tab': (" + recruitResult.x + ", " + recruitResult.y + ")，点击切换");
+        log("  [组队频道] ✓ 模板匹配到'click_recruit_tab': (" + recruitResult.x + ", " + recruitResult.y + ")，点击切换");
         this.smartClick(recruitResult.x + 10, recruitResult.y + 15);
         sleep(1500);
         return;
     }
 
-    // 降级OCR找"招募"文字
-    var recruitTabPos = this.imageRecognition.findTextPosition(screenshot, "招募", 0.7, null, false);
-    if (recruitTabPos && recruitTabPos.x > 0) {
-        log("  [组队频道] ✓ OCR找到'招募': (" + recruitTabPos.x + ", " + recruitTabPos.y + ")，点击切换");
-        this.smartClick(recruitTabPos.x, recruitTabPos.y);
-        sleep(1500);
-        return;
-    }
-
-    log("  [组队频道] ✗ 未找到'招募'tab（模板+OCR均失败）");
+    log("  [组队频道] ✗ 未找到'招募'tab（模板）");
 };
 
 /**
@@ -920,112 +873,94 @@ TaskManager.prototype._isUnwantedBattle = function (text) {
  * @param {Image} screenshot 当前截图
  */
 TaskManager.prototype._exitUnwantedBattle = function (screenshot) {
-    log(">>> 执行 _exitUnwantedBattle: 退出非目标战斗（循环重试模式）");
+    log(">>> 执行 _exitUnwantedBattle: 退出非目标战斗（纯模板）");
     toast("⚠ 非目标战斗，正在退出...");
 
-    var maxRetries = 6;  // 最大循环次数
+    var sw = device.width || 720;
+    var sh = device.height || 1280;
+    var maxRetries = 6;
+
     for (var attempt = 0; attempt < maxRetries && this.isRunning; attempt++) {
         log("  [退出] 第 " + (attempt + 1) + "/" + maxRetries + " 次尝试");
 
-        // 步骤1: 先连续点击屏幕中央（关闭卡牌/技能选择弹窗）
-        var sw = screenshot.getWidth();
-        var sh = screenshot.getHeight();
-        for (var i = 0; i < 5; i++) {
-            click(sw / 2 + random(-20, 20), sh * 0.55 + random(-15, 15));
+        // 步骤1: 点击屏幕中央关闭弹窗
+        for (var i = 0; i < 3; i++) {
+            click(sw / 2 + random(-30, 30), sh * 0.55 + random(-20, 20));
             sleep(200);
         }
 
-        // 步骤2: 再点左上角暂停按钮
-        for (var j = 0; j < 3; j++) {
-            click(45 + random(-10, 10), 50 + random(-8, 8));
-            sleep(200);
-        }
-        sleep(1500); // 等暂停菜单弹出
+        // 步骤2: 点右上角暂停按钮
+        click(sw - 25 + random(-8, 8), 45 + random(-8, 8));
+        sleep(1500);
 
-        // 步骤3: 截图检查是否出现暂停菜单
+        // 步骤3: 截图，用模板匹配退出/关闭按钮
         var pauseScreen = this.imageRecognition.captureScreen();
         if (!pauseScreen) continue;
 
-        // 步骤3: 尝试点"退出"
-        var exitPos = this.imageRecognition.findTextPosition(pauseScreen, "退出", 0.7, null, false);
-        if (exitPos && exitPos.x > 0) {
-            log("  [退出] ✓ 找到'退出'按钮: (" + exitPos.x + ", " + exitPos.y + ")");
-            click(exitPos.x, exitPos.y);
+        if (this.clickTemplate("click/click_close", pauseScreen)) {
+            log("  [退出] ✓ 模板匹配到关闭/退出按钮");
             toast("已退出非目标战斗");
             pauseScreen.recycle();
-
             sleep(2000);
 
-            // 步骤4: 结果页点"返回"
+            // 步骤4: 结果页返回（模板优先）
             var resultScreen = this.imageRecognition.captureScreen();
             if (resultScreen) {
-                var returnPos = this.imageRecognition.findTextPosition(resultScreen, "返回", 0.7, null, false);
-                if (returnPos && returnPos.x > 0 && returnPos.y > 0) {
-                    log("  [退出] ✓ 结果页找到'返回': (" + returnPos.x + ", " + returnPos.y + ")");
-                    click(returnPos.x + random(-5, 5), returnPos.y + random(-5, 5));
-                } else {
-                    var tmplResult = this.imageRecognition.matchTemplate(resultScreen, "complete_turn_icon", 0.7);
-                    if (tmplResult.found) {
-                        click(tmplResult.x, tmplResult.y);
-                        log("  [退出] ✓ 模板匹配到结算返回按钮");
-                    }
-                }
+                this.clickTemplate("scene/battle/scene_huanqiu_return", resultScreen)
+                    || this.clickTemplate("scene/battle/scene_quit", resultScreen)
+                    || click(sw * 0.15, sh * 0.85); // 坐标兜底
                 resultScreen.recycle();
             }
-
-            sleep(1500);
-            log("<<< _exitUnwantedBattle 成功退出，回到TEAM_HALL");
+            log("<<< _exitUnwantedBattle 成功退出");
             return;
         }
 
-        // 没找到"退出"，可能被弹窗遮挡，继续循环
-        log("  [退出] 未找到'退出'文字，可能有弹窗遮挡，下次循环继续...");
+        log("  [退出] 未匹配到退出按钮，下次循环...");
         pauseScreen.recycle();
     }
 
-    log("<<< _exitUnwantedBattle 循环结束未成功退出");
+    log("<<< _exitUnwantedBattle 循环结束，强制返回");
+    this.backButtonClick();
 };
 
 /**
- * 战斗操作
+ * 战斗操作（纯模板匹配）
+ * 技能选择：如果 detectScene 缓存了文字且含"X选择技能"则疯狂点击中间
+ * 冒泡图标：模板匹配并点击
+ * 开始游戏：模板匹配按钮并点击
  */
 TaskManager.prototype.battleActions = function (screenshot, cachedText) {
-    log(">>> 执行 battleActions: 战斗中");
+    log(">>> 执行 battleActions: 战斗中（纯模板）");
     toast("操作: 战斗中");
 
-    // ========== 优先检测：技能选择界面（"X 选择技能"，倒计时选技能）==========
-    // 如截图所示：战斗中出现 "5 选择技能" 界面，需要疯狂点击中间选一个
-    var battleText = cachedText || this.imageRecognition.recognizeText(screenshot);
+    // ========== 技能选择检测（用缓存OCR文字，零额外开销）==========
+    var battleText = cachedText || "";
     if (battleText && /[\d]+[\s]*选择技能/.test(battleText)) {
-        log("  [战斗] ✓ 检测到'X 选择技能'界面，疯狂点击屏幕中间选择技能");
+        log("  [战斗] ✓ 检测到'X 选择技能'界面，疯狂点击屏幕中间");
         var sw = screenshot.getWidth();
         var sh = screenshot.getHeight();
         var targetX = Math.floor(sw * 0.50);
-        var targetY = Math.floor(sh * 0.58); // 屏幕中间偏下，技能卡片区域
-        // 疯狂点击3秒，确保选中
+        var targetY = Math.floor(sh * 0.58);
         var skillEndTime = Date.now() + 3000;
         while (Date.now() < skillEndTime && this.isRunning) {
             click(targetX + random(-8, 8), targetY + random(-8, 8));
             sleep(50);
         }
-        return; // 选完直接返回，等下一轮循环
+        return;
     }
 
-    // 查找 hp100 图标并点击（小图标保留模板匹配）
-    var hp100Results = this.imageRecognition.findAllTemplates(screenshot, "hp100_icon");
+    // 无技能选择 → 正常战斗中：点冒泡 / 点开始游戏
+    // 模板匹配冒泡图标并点击
+    var hp100Results = this.imageRecognition.findAllTemplates(screenshot, "click/huanqiu_room/click_chat_bubble");
     if (hp100Results.length > 0) {
-        log("找到 " + hp100Results.length + " 个 hp100 图标");
+        log("找到 " + hp100Results.length + " 个冒泡图标，点击");
         this.clickAllPositions(hp100Results);
+    } else {
+        // 没有冒泡 → 尝试模板匹配"开始游戏"按钮
+        // ⚠ 需要在 scene/huanqiu_room/ 下放一个"开始游戏"按钮的模板
+        this.clickTemplate("scene/huanqiu_room/scene_huanqiu_room1")
+            || this.clickTemplate("click/huanqiu_room/click_chat_bubble"); // 兜底再试冒泡
     }
-
-    // OCR 优先点击"开始游戏"
-    if (!this.clickByText("开始游戏", "begin_fighting")) {
-        // 降级模板匹配
-        this.clickTemplate("begin_fighting");
-    }
-
-    // 关闭战斗界面
-    this.clickTemplate("close_fighting");
 };
 
 // ==================== 辅助操作 ====================
@@ -1121,16 +1056,21 @@ TaskManager.prototype.clickTemplate = function (templateName) {
 };
 
 /**
- * 点击返回按钮（使用游戏内返回图标，避免退到微信）
+ * 点击返回按钮（纯模板匹配）
+ * 优先：退出结算模板 → 返回按钮模板 → 坐标兜底（左上角）
  */
 TaskManager.prototype.backButtonClick = function () {
-    log("点击游戏内返回按钮");
-    // 优先用游戏内返回箭头图标模板
-    if (!this.clickTemplate("back_button")) {
-        // 模板没找到，尝试点击左上角常见返回位置
-        log("返回图标模板未找到，尝试坐标点击左上角");
-        click(50, 50);
+    log("点击游戏内返回按钮（纯模板）");
+    // 多个返回/关闭模板依次尝试
+    if (this.clickTemplate("scene/battle/scene_quit")
+        || this.clickTemplate("scene/battle/scene_huanqiu_return")
+        || this.clickTemplate("click/click_close")) {
+        sleep(1500);
+        return;
     }
+    // 模板都没命中，坐标兜底
+    log("返回模板均未命中，坐标点击左上角");
+    click(50, 50);
     sleep(1500);
 };
 
@@ -1138,9 +1078,9 @@ TaskManager.prototype.backButtonClick = function () {
  * 处理超时
  */
 TaskManager.prototype.handleTimeout = function () {
-    log("  [超时] 处理超时，尝试返回主菜单 (当前状态: " + this.currentState + ")");
+    log("  [超时] 处理超时 (当前: " + this.currentState + ")");
     this.backButtonClick();
-    this._switchState("MAIN_MENU", Date.now());
+    this._switchState("MAIN_MENU_BASE", Date.now());
 };
 
 /**
@@ -1148,53 +1088,37 @@ TaskManager.prototype.handleTimeout = function () {
  */
 TaskManager.prototype.handleBattleTimeout = function () {
     log("战斗超时，尝试退出");
-    this.backButtonClick();
-    this._switchState("MAIN_MENU", Date.now());
+    this._exitUnwantedBattle(this.imageRecognition.captureScreen())
+        || this.backButtonClick();
+    this._switchState("TEAM_HALL", Date.now());
 };
 
 /**
- * 处理结算返回：OCR识别"返回"按钮点击
- * 结算页底部有"返回"文字按钮（如截图所示）
+ * 处理结算返回：模板优先点击返回按钮
+ * 策略：结算页返回按钮 → 通用退出按钮 → 坐标兜底
  */
 TaskManager.prototype.handleCompleteTurn = function () {
-    log(">>> 处理结算返回：OCR识别'返回'按钮");
-    var screenshot = this.imageRecognition.captureScreen();
-    if (!screenshot) {
-        log("  [结算] 截图失败，尝试模板匹配");
-        this._clickReturnFallback();
-        return;
-    }
+    log(">>> 处理结算返回（纯模板）");
 
-    // 策略1: OCR找"返回"文字
-    var returnPos = this.imageRecognition.findTextPosition(screenshot, "返回", 0.7, null, false);
-    if (returnPos && returnPos.x > 0 && returnPos.y > 0) {
-        log("  [结算] ✓ OCR找到'返回'按钮: (" + returnPos.x + ", " + returnPos.y + ")");
-        click(returnPos.x + random(-5, 5), returnPos.y + random(-5, 5));
-        screenshot.recycle();
-        sleep(2000);
-        return;
-    }
-
-    log("  [结算] OCR未找到'返回'文字，尝试更多策略...");
-    screenshot.recycle();
+    // 直接调用降级策略（已经是模板优先的）
     this._clickReturnFallback();
 };
 
 /**
  * 结算页"返回"按钮的降级点击策略
- * 策略优先级: complete_turn_icon → back_button → 坐标(左下角)
+ * 策略优先级: scene_huanqiu_return → scene_quit → 坐标(左下角)
  */
 TaskManager.prototype._clickReturnFallback = function () {
-    // 策略2: 模板匹配结算页返回按钮
-    if (this.clickTemplate("complete_turn_icon")) {
-        log("  [结算] ✓ complete_turn_icon 模板匹配成功");
+    // 策略2: 模板匹配结算页返回按钮（寰球救援结算）
+    if (this.clickTemplate("scene/battle/scene_huanqiu_return")) {
+        log("  [结算] ✓ scene_huanqiu_return 模板匹配成功");
         sleep(2000);
         return;
     }
 
-    // 策略3: 通用返回按钮模板
-    if (this.clickTemplate("back_button")) {
-        log("  [结算] ✓ back_button 模板匹配成功");
+    // 策略3: 通用退出按钮模板
+    if (this.clickTemplate("scene/battle/scene_quit")) {
+        log("  [结算] ✓ scene_quit 模板匹配成功");
         sleep(2000);
         return;
     }

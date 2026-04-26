@@ -12,111 +12,70 @@
 //   当关键词匹配+排除词命中时，可设置 overrideTo 强制转到另一场景
 // templates: 模板匹配降级用的模板名列表
 var SCENE_RULES = [
+    // ==================== 模板匹配场景（优先级从高到低）====================
+    // 模板名格式: "子目录/文件名"（不含.png），直接定位 ./templates/{templateName}.png
+    // 例如: "scene/battle/scene_in_battle" → ./templates/scene/battle/scene_in_battle.png
+    // 无需递归搜索，一次 images.read() 即可
+
+    // ===== 最高优先：结算和退出 =====
     {
-        // 结算页面：优先级最高！战斗结束后随时可能出现，必须第一时间识别并返回
-        // 特征词：恭喜获得/奖励总览/伤害统计 + 返回按钮
-        scene: "COMPLETE_TURN",
+        scene: "BATTLE_COMPLETE_TURN",
         priority: -1,
-        ocrKeywords: ["恭喜获得", "奖励总览", "伤害统计"],
-        minMatch: 1,
-        templates: ["complete_turn_icon"]
+        templates: ["scene/battle/scene_huanqiu_return", "scene/battle/scene_jingying_return"]
     },
     {
-        // 组队频道（冒泡点击后进入，包含组队/世界频道tab）
-        // 动作：点击招募tab切换到招募频道
+        scene: "BATTLE_QUIT",
+        priority: -1,
+        templates: ["scene/battle/scene_quit"]
+    },
+
+    // ===== 战斗中 =====
+    {
+        scene: "IN_BATTLE",
+        priority: 0,
+        templates: ["scene/battle/scene_in_battle"]
+    },
+
+        // ===== 组队/招募频道 =====
+    {
         scene: "TEAM_HALL",
         priority: 0,
-        ocrKeywords: ["组队频道", "世界频道", "配置分享", "军团频道", "征途频道"],
-        minMatch: 1,
-        templates: ["team_hall_tag"]
+        templates: ["scene/bubble_chat/scene_team_hall"]
     },
     {
-        // 招募频道（组队频道里点击招募tab后进入）
-        // 动作：疯狂点击抢房
         scene: "RECRUIT_CHANNEL",
         priority: 0,
-        ocrKeywords: ["招募频道"],
-        minMatch: 1,
-        templates: ["recruit_tab"]
+        templates: ["scene/bubble_chat/scene_recruit_tab"]
     },
+
+    // ===== 寰球救援房间 =====
+    {
+        scene: "WAITING_START",
+        priority: 1,
+        templates: ["scene/huanqiu_room/scene_waiting_start"]
+    },
+    {
+        scene: "HUANQIU_ROOM",
+        priority: 2,
+        templates: ["scene/huanqiu_room/scene_huanqiu_room"]
+    },
+
+    // ===== 训练大厅 =====
     {
         scene: "TRAINING_HALL",
-        priority: 1,
-        ocrKeywords: ["玩法商店", "深渊挑战", "寰球远征", "终末危机", "获取防线核心材料"],
-        minMatch: 2,
-        templates: ["training_hall_menu"]
-    },
-    {
-        scene: "BASE_MENU",
-        priority: 2,
-        ocrKeywords: ["历练大厅", "危机应变", "远征堡垒", "研究所", "食堂", "酒店", "展览馆", "赛季英雄录"],
-        minMatch: 2, // 需要≥2个建筑名才判定为基地（避免通用词误匹配）
-        templates: ["base_menu"]
-    },
-    {
-        scene: "MAIN_MENU",
-        priority: 3,
-        ocrKeywords: ["商城", "角色", "核心", "战斗", "基地", "军团", "征途"],
-        minMatch: 2, // 需要≥2个导航栏词
-        templates: ["main_menu", "core_menu", "legion_menu", "charactpr_menu", "mall_menu"]
-    },
-    {
-        // 已加入房间，等待房主开始游戏
-        // 特征：有"等待开始"、"开始后消耗"等文字
-        // 动作：等待5秒，让状态机重新识别
-        scene: "WAITING_START",
-        priority: 3,
-        ocrKeywords: ["等待开始", "开始后消耗", "房主", "准备中"],
-        minMatch: 1,
-        templates: []
-    },
-    {
-        scene: "GAME_ROOM",
-        priority: 4,
-        // OCR经常把"-"识别成"一"，所以两种变体都加
-        ocrKeywords: [
-            "救援-难度", "寰球救援-难度", "环球救援-难度", "豪球救援-难度",
-            "救援一难度", "寰球救援一难度", "环球救援一难度", "豪球救援一难度",
-            "输入邀请码", "开始游戏"
-        ],
-        minMatch: 2,
-        // 排除词：招募/组队频道里的"救援-难度"是房间列表，不是游戏房间
-        excludeKeywords: ["招募频道", "组队频道", "世界频道"],
-        combinedRules: [
-            { keywords: ["输入邀请码", "开始游戏"], requireAll: true },
-        ],
-        templates: ["team_hall_icon", "global_expedition"]
-    },
-    {
-        // 精英战斗（非目标战斗）
-        // requireTemplate=true：必须暂停按钮模板+OCR关键词同时命中（与关系）
-        // 文字特征: "波次"、"X级"，无"寰球救援-难度"
-        // 如截图: "30.地下甬道" + "波次:2/20"
-        // 需要主动退出
-        scene: "JINGYING_BATTLE",
         priority: 5,
-        requireTemplate: true,  // 暂停按钮 || 必须先命中，再匹配OCR
-        ocrKeywords: ["波次", "级", "1000"],
-        minMatch: 1,
-        excludeKeywords: ["难度", "球救援", "球远征"],
-        templates: ["in_battle"]
+        templates: ["scene/training_hall/scene_training_hall"]
     },
-    {
-        // 寰球救援战斗（目标战斗）
-        // requireTemplate=true：必须暂停按钮模板+OCR关键词同时命中（与关系）
-        // 文字特征: "寰球救援-难度X"、"每10秒"、"释放技能"
-        // 这是预期进入的战斗，正常打不退出
-        scene: "HUANQIU_BATTLE",
-        priority: 6,
-        requireTemplate: true,  // 暂停按钮 || 必须先命中，再匹配OCR
-        ocrKeywords: ["球救援-难度", "环球救援-难度", "豪球救援-难度", "1000", "级", "球救援一难度", "环球救援一难度", "豪球救援一难度"],
-        minMatch: 1,
-        templates: ["in_battle"]
-    }
-];
 
-// COMPLETE_TURN 特殊处理：结算页面无文字，模板优先级最高（在detectScene中单独处理）
-SCENE_RULES.COMPLETE_TURN_TEMPLATE = "complete_turn_icon";
+    // ===== 主菜单各tab（独立场景，状态机可分别处理）=====
+    { scene: "MAIN_MENU_BASE",   priority: 6, templates: ["scene/main_menu/scene_main_menu_base"] },
+    { scene: "MAIN_MENU_ARMY",   priority: 6, templates: ["scene/main_menu/scene_main_menu_army"] },
+    { scene: "MAIN_MENU_CORE",   priority: 6, templates: ["scene/main_menu/scene_main_menu_core"] },
+    { scene: "MAIN_MENU_ROLE",   priority: 6, templates: ["scene/main_menu/scene_main_menu_role"] },
+    { scene: "MAIN_MENU_SHOP",   priority: 6, templates: ["scene/main_menu/scene_main_menu_shop"] },
+    { scene: "MAIN_MENU_JOURNEY",priority: 6, templates: ["scene/main_menu/scene_main_menu_journey"] },
+    { scene: "MAIN_MENU_BATTLE", priority: 6, templates: ["scene/main_menu/scene_main_menu_battle"] },
+];
 
 function ImageRecognition(config) {
     this.config = config || {};
@@ -130,6 +89,7 @@ function ImageRecognition(config) {
     this._ocrBlocks = null;      // 上次OCR识别的所有文字块 [{text, x, y}, ...]
     this._ocrFullText = "";       // 上次拼接的文字串
     this._ocrScreenTime = 0;     // 上次OCR的时间戳
+    this.lastOcrTime = 0;         // 上次兜底OCR的时间戳（限制OCR频率）
 }
 
 /**
@@ -242,26 +202,15 @@ ImageRecognition.prototype.loadTemplate = function (templateName) {
         return this.templateCache[templateName];
     }
 
-    var paths = [
-        "./templates/" + templateName + ".png",
-        "./templates/battle/" + templateName + ".png",
-        "./templates/menu/" + templateName + ".png",
-        "./templates/training/" + templateName + ".png",
-        "./templates/yuanzheng/" + templateName + ".png",
-        "./templates/huanqiu/" + templateName + ".png"
-    ];
-
-    for (var i = 0; i < paths.length; i++) {
-        try {
-            var img = images.read(paths[i]);
-            if (img) {
-                this.templateCache[templateName] = img;
-                return img;
-            }
-        } catch (e) {
-            // 继续尝试下一个路径
+    // 模板名已包含子目录路径，直接读取：如 "scene/battle/scene_in_battle"
+    // → ./templates/scene/battle/scene_in_battle.png
+    try {
+        var img = images.read("./templates/" + templateName + ".png");
+        if (img) {
+            this.templateCache[templateName] = img;
+            return img;
         }
-    }
+    } catch (e) {}
 
     log("未找到模板: " + templateName);
     return null;
@@ -746,8 +695,12 @@ ImageRecognition.prototype.editDistance = function (a, b) {
 };
 
 /**
- * 检测当前场景
- * 流程：结算页模板 → requireTemplate(与关系) → 纯OCR → 模板降级 → 分区OCR
+ * 检测当前场景 — 模板优先方案（<50ms/次）
+ *
+ * 流程：按 priority 顺序模板匹配 → 命中即返回 → 无命中才用 OCR 兜底
+ * 模板位于 templates/scene/ 目录，命名: 场景名.png
+ * 点击模板位于 templates/click/ 目录，命名: click_动作描述.png
+ *
  * @param {Image} screenshot 截图
  * @returns {string} 场景类型
  */
@@ -758,46 +711,41 @@ ImageRecognition.prototype.detectScene = function (screenshot) {
     }
 
     try {
-        // ========== 0. 结算页面（模板优先，图形无文字）==========
-        if (this.matchTemplate(screenshot, "complete_turn_icon", 0.8).found) {
-            return this._setScene("COMPLETE_TURN", currentTime);
-        }
+        // ========== 阶段1: 模板匹配（毫秒级，<50ms）==========
+        var sortedRules = SCENE_RULES.slice().sort(function (a, b) {
+            return (a.priority || 99) - (b.priority || 99);
+        });
 
-        // ========== 1. 全屏 OCR 文字（一次OCR，复用结果！）==========
-        var fullText = "";
-        if (this.ocrEnabled) {
-            var blocks = this.ocrWithBlocks(screenshot, null, false);
-            this._ocrBlocks = blocks;
-            this._ocrScreenTime = Date.now();
-            if (blocks && blocks.length > 0) {
-                fullText = blocks.map(function (b) { return b.text; }).join("");
-                this._ocrFullText = fullText;
+        for (var ri = 0; ri < sortedRules.length; ri++) {
+            var rule = sortedRules[ri];
+            if (!rule.templates || rule.templates.length === 0) continue;
+            for (var ti = 0; ti < rule.templates.length; ti++) {
+                if (this.matchTemplate(screenshot, rule.templates[ti], this.templateThreshold).found) {
+                    log("[模板] ✓ " + rule.scene + " (" + rule.templates[ti] + ")");
+                    return this._setScene(rule.scene, currentTime);
+                }
             }
-            log("OCR全屏文字(" + fullText.length + "字): " + fullText.substring(0, 300));
-            log("OCR缓存: " + (blocks ? blocks.length : 0) + " 个文字块");
         }
 
-        // ========== 2. requireTemplate 规则（模板 AND OCR 必须同时命中）==========
-        if (fullText) {
-            var rtScene = this._detectRequireTemplateScene(screenshot, fullText, currentTime);
-            if (rtScene) return rtScene;
-        }
-
-        // ========== 3. 纯 OCR 规则（原有逻辑）==========
-        if (fullText) {
-            var ocrScene = this._detectSceneByOCR(fullText, currentTime);
-            if (ocrScene) return ocrScene;
-        }
-
-        // ========== 2. 模板匹配降级 ==========
-        var templateScene = this._detectSceneByTemplate(screenshot, currentTime);
-        if (templateScene) return templateScene;
-
-        // ========== 3. 分区 OCR 辅助（当全屏 OCR 失败时）==========
-        if (!fullText || fullText.length < 5) {
-            var regionalScene = this._detectSceneByRegionalOCR(screenshot, currentTime);
-            if (regionalScene) return regionalScene;
-        }
+        // 屏蔽OCR
+        // // ========== 阶段2: OCR 兜底（仅模板全部未命中时，每5秒一次）==========
+        // if (this.ocrEnabled && (!this.lastOcrTime || currentTime - this.lastOcrTime > 5000)) {
+        //     this.lastOcrTime = currentTime;
+        //     var blocks = this.ocrWithBlocks(screenshot, null, false);
+        //     if (blocks && blocks.length > 0) {
+        //         var fullText = blocks.map(function (b) { return b.text; }).join("");
+        //         log("[OCR兜底](" + fullText.length + "字): " + fullText.substring(0, 200));
+        //         for (var ocri = 0; ocri < sortedRules.length; ocri++) {
+        //             var ocrRule = sortedRules[ocri];
+        //             if (!ocrRule.ocrKeywords || !ocrRule.ocrKeywords.length) continue;
+        //             var mr = this._matchOCRRule(fullText, ocrRule);
+        //             if (mr.matched && !mr.overridden) {
+        //                 log("[OCR] ✓ " + ocrRule.scene + " (" + mr.matchedWords.join(",") + ")");
+        //                 return this._setScene(ocrRule.scene, currentTime);
+        //             }
+        //         }
+        //     }
+        // }
     } catch (e) {
         log("场景检测出错: " + e.message);
     }
