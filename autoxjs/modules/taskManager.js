@@ -78,7 +78,20 @@ TaskManager.prototype.start = function () {
                     sleep(2000);
                     continue;
                 }
-                log("截图成功, 尺寸: " + screenshot.getWidth() + "x" + screenshot.getHeight());
+
+                // 保护：截图可能已被回收（上轮异常导致），验证可用性
+                var imgValid = false;
+                try {
+                    log("截图成功, 尺寸: " + screenshot.getWidth() + "x" + screenshot.getHeight());
+                    imgValid = true;
+                } catch (imgErr) {
+                    log("[警告] 截图对象已回收，跳过本轮: " + imgErr.message);
+                    try { screenshot.recycle(); } catch(e) {}
+                }
+                if (!imgValid) {
+                    sleep(1500);
+                    continue;
+                }
 
                 var sceneType = self.imageRecognition.detectScene(screenshot);
                 log(">>> 场景检测结果: " + sceneType + " | 当前状态: " + self.currentState);
@@ -299,9 +312,12 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
             }
 
             if (sceneType === "IN_BATTLE") {
-                // ===== 正常战斗中（寰球救援/精英战斗统一处理）=====
+                // ===== 正常战斗中 =====
+                // 每次确认在战斗中就刷新超时计时器（避免短暂切换导致误触发）
+                this.lastStateChangeTime = currentTime;
+
                 var battleElapsed = Date.now() - this.battleStartTime;
-                // 超时保护：超过10分钟也退出
+                // 硬超时：超过10分钟强制退出
                 if (battleElapsed > 600000) {
                     log("  [状态机] ⚠ 战斗已进行 " + Math.round(battleElapsed / 1000) + "s，超过10分钟，主动退出！");
                     toast("战斗超时10分钟，正在退出...");
@@ -310,9 +326,8 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
                     this._switchState("TEAM_HALL", currentTime);
                     break;
                 }
-                var battleText = this.imageRecognition.recognizeText(screenshot);
-                log("  [状态机] 正常战斗中，执行 battleActions");
-                this.battleActions(screenshot, battleText);
+                log("  [状态机] 正常战斗中（已 " + Math.round(battleElapsed / 1000) + "s），执行 battleActions");
+                this.battleActions(screenshot);
 
             } else if (sceneType === "BATTLE_COMPLETE_TURN") {
                 // 战斗结束出结算 → 切到BATTLE_COMPLETE_TURN状态
@@ -320,13 +335,17 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
                 toast("⚡ 战斗结束，进入结算处理");
                 this.battleStartTime = 0;
                 this._switchState("BATTLE_COMPLETE_TURN", currentTime);
-            } else if (currentTime - this.lastStateChangeTime > 60000) {
-                log("  [状态机] IN_BATTLE 超时60s，处理战斗超时");
-                this.handleBattleTimeout();
-            } else {
-                // 场景变了（弹窗等短暂遮挡），跟随切换
-                log("  [状态机] IN_BATTLE状态但场景为 " + sceneType + "，跟随切换");
+            } else if (sceneType === "UNKNOWN") {
+                // 战斗中偶尔出现UNKNOWN（技能选择弹窗/转场动画），容忍5秒不操作
+                log("  [状态机] 战斗中短暂UNKNOWN，等待恢复...");
+                // 不执行任何操作，等下一轮重新识别
+            } else if (currentTime - this.lastStateChangeTime > 15000) {
+                // 非IN_BATTLE非UNKNOWN且持续超过15秒才视为需要跟随切换
+                log("  [状态机] IN_BATTLE状态但场景变为 " + sceneType + "（>15s），跟随切换");
                 this._switchState(sceneType, currentTime);
+            } else {
+                // 场景短暂变化（弹窗等），保持在IN_BATTLE
+                log("  [状态机] IN_BATTLE状态但场景为 " + sceneType + "，暂时保持");
             }
             break;
 
@@ -868,75 +887,113 @@ TaskManager.prototype._isUnwantedBattle = function (text) {
 };
 
 /**
- * 退出非目标战斗：点击暂停(||) → 点击"退出"
- * 流程: 模板匹配暂停按钮 → 截图OCR找"退出"文字 → 点击退出 → 回到招募继续找房
- * @param {Image} screenshot 当前截图
+ * 退出非目标战斗：坐标操作为主，模板兜底
+ * 不依赖 click/click_close 模板（可能不存在）
+ * 流程：关弹窗 → 点暂停(右上角) → 退坐标点击 → 结果页返回
  */
 TaskManager.prototype._exitUnwantedBattle = function (screenshot) {
-    log(">>> 执行 _exitUnwantedBattle: 退出非目标战斗（纯模板）");
+    log(">>> 执行 _exitUnwantedBattle: 退出非目标战斗");
     toast("⚠ 非目标战斗，正在退出...");
 
     var sw = device.width || 720;
     var sh = device.height || 1280;
-    var maxRetries = 6;
+    var maxRetries = 4; // 减少重试次数
 
     for (var attempt = 0; attempt < maxRetries && this.isRunning; attempt++) {
         log("  [退出] 第 " + (attempt + 1) + "/" + maxRetries + " 次尝试");
 
-        // 步骤1: 点击屏幕中央关闭弹窗
+        // 步骤1: 点击屏幕中央关闭可能的技能选择/卡牌弹窗
         for (var i = 0; i < 3; i++) {
             click(sw / 2 + random(-30, 30), sh * 0.55 + random(-20, 20));
             sleep(200);
         }
 
-        // 步骤2: 点右上角暂停按钮
+        // 步骤2: 点右上角暂停按钮位置
         click(sw - 25 + random(-8, 8), 45 + random(-8, 8));
         sleep(1500);
 
-        // 步骤3: 截图，用模板匹配退出/关闭按钮
-        var pauseScreen = this.imageRecognition.captureScreen();
+        // 步骤3: 截图检测是否出现暂停菜单 → 用坐标点"退出"
+        var pauseScreen = null;
+        try {
+            pauseScreen = this.imageRecognition.captureScreen();
+        } catch (e) {
+            log("  [退出] 截图异常: " + e.message);
+            continue;
+        }
         if (!pauseScreen) continue;
 
-        if (this.clickTemplate("click/click_close", pauseScreen)) {
-            log("  [退出] ✓ 模板匹配到关闭/退出按钮");
-            toast("已退出非目标战斗");
-            pauseScreen.recycle();
-            sleep(2000);
-
-            // 步骤4: 结果页返回（模板优先）
-            var resultScreen = this.imageRecognition.captureScreen();
-            if (resultScreen) {
-                this.clickTemplate("scene/battle/scene_huanqiu_return", resultScreen)
-                    || this.clickTemplate("scene/battle/scene_quit", resultScreen)
-                    || click(sw * 0.15, sh * 0.85); // 坐标兜底
-                resultScreen.recycle();
-            }
-            log("<<< _exitUnwantedBattle 成功退出");
-            return;
+        // 先尝试模板匹配（如果有模板的话）
+        var exited = false;
+        try {
+            exited = this.clickTemplate("click/click_close", pauseScreen);
+        } catch (e) {
+            log("  [退出] 模板匹配异常，用坐标兜底");
         }
 
-        log("  [退出] 未匹配到退出按钮，下次循环...");
-        pauseScreen.recycle();
+        if (!exited) {
+            // 模板没匹配到 → 直接点暂停菜单中常见的"退出"按钮位置
+            // 退出按钮通常在暂停菜单的中下部
+            click(sw / 2 + random(-30, 30), sh * 0.45 + random(-10, 10));
+            log("  [退出] 坐标点击'退出'按钮位置");
+            exited = true;
+        } else {
+            try { pauseScreen.recycle(); } catch(e) {}
+        }
+
+        sleep(2500);
+
+        // 步骤4: 检测是否到了结果页/结算页，点返回
+        var resultScreen = null;
+        try {
+            resultScreen = this.imageRecognition.captureScreen();
+        } catch (e) {
+            log("  [退出] 结果页截图异常: " + e.message);
+            continue;
+        }
+        if (resultScreen) {
+            try {
+                // 尝试结算页返回模板
+                if (this.clickTemplate("scene/battle/scene_huanqiu_return", resultScreen)
+                    || this.clickTemplate("scene/battle/scene_quit", resultScreen)) {
+                    log("  [退出] ✓ 结算页返回成功");
+                    try { resultScreen.recycle(); } catch(e) {}
+                    this.battleStartTime = 0;
+                    log("<<< _exitUnwantedBattle 成功退出");
+                    return;
+                }
+                // 模板都没命中 → 坐标兜底（左下角返回按钮常见位置）
+                click(sw * 0.15, sh * 0.85);
+                log("  [退出] 坐标点击返回(左下角)");
+            } catch (e) {
+                log("  [退出] 结果页处理异常: " + e.message);
+                click(sw * 0.15, sh * 0.85); // 兜底坐标
+            }
+            try { resultScreen.recycle(); } catch(e) {}
+        }
+
+        this.battleStartTime = 0;
+        log("<<< _exitUnwantedBattle 成功退出");
+        return;
     }
 
-    log("<<< _exitUnwantedBattle 循环结束，强制返回");
+    log("<<< _exitUnwantedBattle 重试耗尽，强制back键");
     this.backButtonClick();
 };
 
 /**
  * 战斗操作（纯模板匹配）
- * 技能选择：如果 detectScene 缓存了文字且含"X选择技能"则疯狂点击中间
+ * 技能选择：matchTemplate 检测 scene_skill_select，命中则点击屏幕中间
  * 冒泡图标：模板匹配并点击
  * 开始游戏：模板匹配按钮并点击
  */
-TaskManager.prototype.battleActions = function (screenshot, cachedText) {
+TaskManager.prototype.battleActions = function (screenshot) {
     log(">>> 执行 battleActions: 战斗中（纯模板）");
     toast("操作: 战斗中");
 
-    // ========== 技能选择检测（用缓存OCR文字，零额外开销）==========
-    var battleText = cachedText || "";
-    if (battleText && /[\d]+[\s]*选择技能/.test(battleText)) {
-        log("  [战斗] ✓ 检测到'X 选择技能'界面，疯狂点击屏幕中间");
+    // ========== 技能选择检测（matchTemplate，比OCR更快更准）==========
+    var skillResult = this.imageRecognition.matchTemplate(screenshot, "scene/battle/scene_skill_select");
+    if (skillResult.found) {
+        log("  [战斗] ✓ 检测到技能选择界面，点击屏幕中间选择技能");
         var sw = screenshot.getWidth();
         var sh = screenshot.getHeight();
         var targetX = Math.floor(sw * 0.50);
@@ -1085,11 +1142,14 @@ TaskManager.prototype.handleTimeout = function () {
 
 /**
  * 处理战斗超时
+ * _exitUnwantedBattle 内部已包含 backButtonClick 兜底，不需要再调用
  */
 TaskManager.prototype.handleBattleTimeout = function () {
     log("战斗超时，尝试退出");
-    this._exitUnwantedBattle(this.imageRecognition.captureScreen())
-        || this.backButtonClick();
+    var screen = null;
+    try { screen = this.imageRecognition.captureScreen(); } catch(e) {}
+    this._exitUnwantedBattle(screen);
+    this.battleStartTime = 0;
     this._switchState("TEAM_HALL", Date.now());
 };
 
