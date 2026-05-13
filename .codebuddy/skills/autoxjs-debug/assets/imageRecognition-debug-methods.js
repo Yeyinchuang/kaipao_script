@@ -8,9 +8,10 @@
 // ==================== 调试截图保存 ====================
 
 /**
- * 调试截图保存目录（模拟器路径）
+ * 调试截图保存目录（MuMu 共享文件夹路径）
+ * 这样截图可以直接在电脑上查看，无需 ADB 拉取
  */
-ImageRecognition.DEBUG_DIR = "/sdcard/autoxjs_debug/";
+ImageRecognition.DEBUG_DIR = "/sdcard/Documents/ MuMu共享文件夹/autoxjs_debug/";
 
 /**
  * 保存调试截图到固定目录

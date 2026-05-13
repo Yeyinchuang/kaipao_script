@@ -2,12 +2,13 @@
 chcp 65001 >nul
 echo ========================================
 echo   AutoXJS Debug - 拉取调试截图
-echo   MuMu 模拟器 → 本地电脑
+echo   MuMu 共享文件夹 -> 项目目录
 echo ========================================
 echo.
 
 :: === 可配置参数（可按需修改）===
-set "REMOTE_DIR=/sdcard/autoxjs_debug"
+:: MuMu 共享文件夹路径（AutoXJS 截图直接保存到这里）
+set "SHARED_DIR=C:\Users\23357\Documents\MuMu共享文件夹\autoxjs_debug"
 set "LOCAL_DIR=%~dp0..\debug_shots"
 :: =================================
 
@@ -19,36 +20,38 @@ pushd "%LOCAL_DIR%"
 set "ABS_LOCAL_DIR=%cd%"
 popd
 
-echo [1/2] 从设备拉取截图...
-echo      远程: %REMOTE_DIR%
-echo      本地: %ABS_LOCAL_DIR%
+echo [1/2] 从共享文件夹复制截图...
+echo      来源: %SHARED_DIR%
+echo      目标: %ABS_LOCAL_DIR%
 echo.
 
-adb pull "%REMOTE_DIR%" "%ABS_LOCAL_DIR%"
-
-if %ERRORLEVEL% equ 0 (
+:: 检查共享文件夹是否存在
+if not exist "%SHARED_DIR%" (
     echo.
-    echo [2/2] 截图已拉取到: %ABS_LOCAL_DIR%
-    
-    :: 统计文件数
-    for /f %%a in ('dir /b "%ABS_LOCAL_DIR%\*.png" 2^>nul ^| find /c /v ""') do set FILE_COUNT=%%a
-    echo       共 %FILE_COUNT% 张截图
+    echo ✗ 共享文件夹不存在: %SHARED_DIR%
+    echo   请确认 MuMu 模拟器共享文件夹设置正确
+    goto :end
+)
+
+:: 复制所有 png 文件
+set "COPIED_COUNT=0"
+for %%f in ("%SHARED_DIR%\*.png") do (
+    copy /Y "%%f" "%ABS_LOCAL_DIR%\" >nul
+    set /a COPIED_COUNT+=1
+)
+
+if %COPIED_COUNT% gtr 0 (
+    echo.
+    echo [2/2] 截图已复制到: %ABS_LOCAL_DIR%
+    echo       共 %COPIED_COUNT% 张截图
     
     start "" "%ABS_LOCAL_DIR%"
 ) else (
     echo.
-    echo ✗ 拉取失败！请检查：
-    echo.
-    echo   1. ADB 是否可用？
-    echo      adb devices
-    echo.
-    echo   2. MuMu ADB 端口是否正确连接？
-    echo      MuMu 12:  adb connect 127.0.0.1:7555
-    echo      MuMu 9:   adb connect 127.0.0.1:16384
-    echo.
-    echo   3. 如果不用 ADB，可以手动从模拟器拷贝:
-    echo      文件管理器 → Internal Storage → autoxjs_debug
+    echo ℹ 共享文件夹中没有 .png 文件
+    echo    请确保 AutoXJS 脚本已正确配置截图保存路径
 )
 
+:end
 echo.
 pause
