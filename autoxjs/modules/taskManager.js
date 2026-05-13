@@ -2,6 +2,8 @@
  * 任务管理模块 - 状态机驱动的游戏自动化
  */
 
+var { GameMonitor } = require('./gameMonitor');
+
 function TaskManager(config, imageRecognition, debugInfo) {
     this.config = config || {};
     this.imageRecognition = imageRecognition;
@@ -10,8 +12,11 @@ function TaskManager(config, imageRecognition, debugInfo) {
     this.isRunning = false;
     this.lastStateChangeTime = 0;
     this.battleStartTime = 0; // 战斗开始时间，用于超时判断
+    this.nonHuanqiuCount = 0; // 连续未识别到寰球的次数
+    this.jingyingCount = 0; // 连续识别到精英的次数
     this.taskThread = null;
     this.lastActionTime = 0; // 上次操作时间戳（间隔重试用）
+    this.gameMonitor = new GameMonitor(); // 游戏窗口监控
 
     // 任务设置
     var taskConfig = config.task || {};
@@ -61,9 +66,15 @@ TaskManager.prototype.start = function () {
     log("当前状态: " + this.currentState);
     toast("任务已启动: 初始化中");
 
+    // 启动游戏（通过AppID唤起微信小程序）
+    this.gameMonitor.launchGame();
+
+    // 启动窗口守护（防止被切出）
+    this.gameMonitor.start();
+
     // 清理过期调试截图（保留最近50张）
     try { this.imageRecognition.cleanDebugShots(50); } catch(e) {}
-    log("[DEBUG_SHOT] 调试截图目录: " + (this.imageRecognition.DEBUG_DIR || "/sdcard/autoxjs_debug/"));
+    log("[DEBUG_SHOT] 调试截图目录: " + this.imageRecognition.DEBUG_DIR);
 
     var self = this;
     var loopCount = 0;
@@ -113,11 +124,17 @@ TaskManager.prototype.start = function () {
                         needDebugShot = true;
                         debugLabel = self.currentState + "_UNKNOWN_" + unknownCount;
                     }
+                    // 连续UNKNOWN时 sleep 10秒等待恢复，3次(30秒)后报错退出
                     if (unknownCount >= 3) {
-                        toast("⚠ 无法识别屏幕(连续" + unknownCount + "次)\n请确认游戏在前台");
-                        if (unknownCount % 5 === 0) {
-                            log("!!! 已连续 " + unknownCount + " 次无法识别场景！");
-                        }
+                        log("[!!] 连续 " + unknownCount + " 次UNKNOWN，已达上限，报错退出！");
+                        toast("⚠ 连续30秒无法识别场景，任务终止！\n请把日志发给开发者分析");
+                        self.imageRecognition.saveDebugShot(screenshot, "FATAL_UNKNOWN");
+                        self.isRunning = false;
+                        break;
+                    } else {
+                        toast("⚠ 无法识别屏幕(连续" + unknownCount + "次)\n等待10秒后重试...");
+                        log("[!!] sleep 10秒等待场景恢复...");
+                        sleep(10000);
                     }
                 } else {
                     // 状态和场景不匹配时保存截图
@@ -170,6 +187,8 @@ TaskManager.prototype.stop = function () {
         this.taskThread.interrupt();
         this.taskThread = null;
     }
+    // 停止窗口守护
+    this.gameMonitor.stop();
     log("任务已停止");
 };
 
@@ -341,6 +360,8 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
         case "IN_BATTLE":
             if (this.battleStartTime === 0) {
                 this.battleStartTime = Date.now();
+                this.nonHuanqiuCount = 0;
+                this.jingyingCount = 0;
                 log("  [状态机] 进入战斗，判断类型...");
             }
 
@@ -349,30 +370,51 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
             if (sceneType === "IN_BATTLE") {
                 this.lastStateChangeTime = currentTime;
 
-                // ===== 每轮直接判断寰球/精英 =====
+                // ===== 战斗中：只做技能选择，等待结算或精英识别 =====
                 var huanqiuCheck = this.imageRecognition.matchTemplate(screenshot, "scene/battle/scene_huanqiu_battle", 0.6);
                 if (huanqiuCheck.found) {
                     // 寰球救援 → 正常打
+                    this.nonHuanqiuCount = 0;
+                    this.jingyingCount = 0;
                     log("  [状态机] ★ 寰球救援（已 " + Math.round(battleElapsed / 1000) + "s）");
                     this.battleActions(screenshot);
-                } else if (battleElapsed > 5000) {
-                    // 5秒仍未识别到寰球特征 → 精英战斗，退出
-                    log("  [状态机] ⚠ 5秒未识别到寰球特征，判定精英战斗，退出！");
-                    toast("⚠ 误入精英战斗，正在退出...");
-                    this._exitUnwantedBattle(screenshot);
-                    this.battleStartTime = 0;
-                    this._switchState("TEAM_HALL", currentTime);
-                    break;
                 } else {
-                    // 5秒内等待确认
-                    log("  [状态机] 战斗类型待确认（已 " + Math.round(battleElapsed / 1000) + "s）...");
+                    // 未识别到寰球标识 → 累计确认
+                    this.nonHuanqiuCount++;
+                    log("  [状态机] 未识别到寰球特征（连续第 " + this.nonHuanqiuCount + " 次，已 " + Math.round(battleElapsed / 1000) + "s）");
+
+                    // 尝试匹配精英战斗标识（高阈值0.85防误判）
+                    var jingyingCheck = this.imageRecognition.matchTemplate(screenshot, "scene/battle/scene_jingying_battle", 0.85);
+                    if (jingyingCheck.found) {
+                        this.jingyingCount++;
+                        log("  [状态机] 识别到精英特征（连续第 " + this.jingyingCount + " 次，置信度:" + jingyingCheck.confidence.toFixed(2) + "）");
+
+                        // 连续3次识别到精英才确认退出
+                        if (this.jingyingCount >= 3) {
+                            log("  [状态机] ⚠ 连续" + this.jingyingCount + "次识别到精英，确认精英战斗，退出！");
+                            toast("⚠ 误入精英战斗，正在退出...");
+                            this._exitUnwantedBattle(screenshot);
+                            this.battleStartTime = 0;
+                            this.nonHuanqiuCount = 0;
+                            this.jingyingCount = 0;
+                            this._switchState("TEAM_HALL", currentTime);
+                            break;
+                        }
+                    } else {
+                        this.jingyingCount = 0; // 未识别到精英，重置计数
+                    }
+
+                    // 没有确认是精英 → 仍执行战斗操作，等结算
+                    log("  [状态机] 战斗类型待确认，继续战斗等待结算...");
+                    this.battleActions(screenshot);
                 }
 
-                // 硬超时：10分钟
-                if (battleElapsed > 600000) {
-                    log("  [状态机] ⚠ 战斗超时10分钟，退出！");
+                // 硬超时：8分钟
+                if (battleElapsed > 480000) {
+                    log("  [状态机] ⚠ 战斗超时8分钟，退出！");
                     this._exitUnwantedBattle(screenshot);
                     this.battleStartTime = 0;
+                    this.nonHuanqiuCount = 0;
                     this._switchState("TEAM_HALL", currentTime);
                     break;
                 }
@@ -943,83 +985,82 @@ TaskManager.prototype._exitUnwantedBattle = function (screenshot) {
     log(">>> 执行 _exitUnwantedBattle: 退出非目标战斗");
     toast("⚠ 非目标战斗，正在退出...");
 
-    var sw = device.width || 720;
-    var sh = device.height || 1280;
-    var maxRetries = 4; // 减少重试次数
+    var maxRetries = 3;
 
     for (var attempt = 0; attempt < maxRetries && this.isRunning; attempt++) {
         log("  [退出] 第 " + (attempt + 1) + "/" + maxRetries + " 次尝试");
 
         // 步骤1: 点击屏幕中央关闭可能的技能选择/卡牌弹窗
-        for (var i = 0; i < 3; i++) {
-            click(sw / 2 + random(-30, 30), sh * 0.55 + random(-20, 20));
-            sleep(200);
+        var sw = device.width || 720;
+        var sh = device.height || 1280;
+        for (var i = 0; i < 2; i++) {
+            click(sw / 2 + random(-20, 20), sh * 0.55 + random(-15, 15));
+            sleep(300);
         }
+        sleep(500);
 
-        // 步骤2: 点右上角暂停按钮位置
-        click(sw - 25 + random(-8, 8), 45 + random(-8, 8));
-        sleep(1500);
-
-        // 步骤3: 截图检测是否出现暂停菜单 → 用坐标点"退出"
+        // 步骤2: 点击暂停按钮（优先模板匹配，兜底坐标）
         var pauseScreen = null;
-        try {
-            pauseScreen = this.imageRecognition.captureScreen();
-        } catch (e) {
-            log("  [退出] 截图异常: " + e.message);
-            continue;
-        }
-        if (!pauseScreen) continue;
-
-        // 先尝试模板匹配（如果有模板的话）
-        var exited = false;
-        try {
-            exited = this.clickTemplate("click/click_close", pauseScreen);
-        } catch (e) {
-            log("  [退出] 模板匹配异常，用坐标兜底");
-        }
-
-        if (!exited) {
-            // 模板没匹配到 → 直接点暂停菜单中常见的"退出"按钮位置
-            // 退出按钮通常在暂停菜单的中下部
-            click(sw / 2 + random(-30, 30), sh * 0.45 + random(-10, 10));
-            log("  [退出] 坐标点击'退出'按钮位置");
-            exited = true;
-        } else {
+        try { pauseScreen = this.imageRecognition.captureScreen(); } catch(e) {}
+        
+        var pauseClicked = false;
+        if (pauseScreen) {
+            // 优先用模板匹配点击暂停图标
+            pauseClicked = this.clickTemplate("click/bubble_chat/click_exit_quit", pauseScreen);
             try { pauseScreen.recycle(); } catch(e) {}
         }
+        if (!pauseClicked) {
+            // 兜底：点右上角暂停按钮位置
+            click(sw - 25 + random(-8, 8), 45 + random(-8, 8));
+            log("  [退出] 模板未匹配暂停图标，使用坐标兜底");
+        }
+        sleep(1500);
 
-        sleep(2500);
+        // 步骤3: 点击"退出战斗"按钮（优先模板匹配，兜底坐标）
+        var exitScreen = null;
+        try { exitScreen = this.imageRecognition.captureScreen(); } catch(e) {}
+
+        var exitClicked = false;
+        if (exitScreen) {
+            // 优先用模板匹配点击退出战斗
+            exitClicked = this.clickTemplate("click/bubble_chat/click_exit_battle", exitScreen);
+            try { exitScreen.recycle(); } catch(e) {}
+        }
+        if (!exitClicked) {
+            // 兜底：点暂停菜单中"退出"按钮位置
+            click(sw / 2 + random(-30, 30), sh * 0.45 + random(-10, 10));
+            log("  [退出] 模板未匹配退出按钮，使用坐标兜底");
+        }
+        sleep(2000);
 
         // 步骤4: 检测是否到了结果页/结算页，点返回
         var resultScreen = null;
+        try { resultScreen = this.imageRecognition.captureScreen(); } catch(e) { continue; }
+        if (!resultScreen) continue;
+
         try {
-            resultScreen = this.imageRecognition.captureScreen();
-        } catch (e) {
-            log("  [退出] 结果页截图异常: " + e.message);
-            continue;
-        }
-        if (resultScreen) {
-            try {
-                // 尝试结算页返回模板
-                if (this.clickTemplate("scene/battle/scene_huanqiu_return", resultScreen)
-                    || this.clickTemplate("scene/battle/scene_quit", resultScreen)) {
-                    log("  [退出] ✓ 结算页返回成功");
-                    try { resultScreen.recycle(); } catch(e) {}
-                    this.battleStartTime = 0;
-                    log("<<< _exitUnwantedBattle 成功退出");
-                    return;
-                }
-                // 模板都没命中 → 坐标兜底（左下角返回按钮常见位置）
-                click(sw * 0.15, sh * 0.85);
-                log("  [退出] 坐标点击返回(左下角)");
-            } catch (e) {
-                log("  [退出] 结果页处理异常: " + e.message);
-                click(sw * 0.15, sh * 0.85); // 兜底坐标
+            // 尝试结算页返回模板
+            if (this.clickTemplate("scene/battle/scene_jingying_return", resultScreen)
+                || this.clickTemplate("scene/battle/scene_huanqiu_return", resultScreen)
+                || this.clickTemplate("scene/battle/scene_quit", resultScreen)) {
+                log("  [退出] ✓ 结算页返回成功");
+                try { resultScreen.recycle(); } catch(e) {}
+                this.battleStartTime = 0;
+                this.nonHuanqiuCount = 0;
+                log("<<< _exitUnwantedBattle 成功退出");
+                return;
             }
-            try { resultScreen.recycle(); } catch(e) {}
+            // 模板都没命中 → 坐标兜底
+            click(sw * 0.15, sh * 0.85);
+            log("  [退出] 坐标点击返回(左下角)");
+        } catch (e) {
+            log("  [退出] 结果页处理异常: " + e.message);
+            click(sw * 0.15, sh * 0.85);
         }
+        try { resultScreen.recycle(); } catch(e) {}
 
         this.battleStartTime = 0;
+        this.nonHuanqiuCount = 0;
         log("<<< _exitUnwantedBattle 成功退出");
         return;
     }

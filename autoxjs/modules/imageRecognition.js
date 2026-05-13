@@ -77,6 +77,8 @@ function ImageRecognition(config) {
     this._ocrFullText = "";
     this._ocrScreenTime = 0;
     this.lastOcrTime = 0;
+    // MuMu 共享文件夹，截图直接保存到这里，电脑可直接查看
+    this.DEBUG_DIR = "/sdcard/Documents/ MuMu共享文件夹/autoxjs_debug/";
 }
 
 ImageRecognition.prototype.captureScreen = function () {
@@ -192,17 +194,11 @@ ImageRecognition.prototype._setScene = function (scene, time) {
 
 // ==================== 调试截图保存 ====================
 
-/**
- * 调试截图保存目录（MuMu 共享文件夹）
- * 截图直接保存到共享文件夹，电脑可直接查看，无需 ADB
- */
-ImageRecognition.DEBUG_DIR = "/sdcard/Documents/ MuMu共享文件夹/autoxjs_debug/";
-
 ImageRecognition.prototype.saveDebugShot = function (screenshot, label) {
     if (!screenshot) return null;
 
     try {
-        var dir = ImageRecognition.DEBUG_DIR;
+        var dir = this.DEBUG_DIR;
         if (!files.exists(dir)) {
             files.createWithDirs(dir);
         }
@@ -232,7 +228,7 @@ ImageRecognition.prototype.saveDebugShot = function (screenshot, label) {
 ImageRecognition.prototype.cleanDebugShots = function (keepRecent) {
     keepRecent = keepRecent || 50;
     try {
-        var dir = ImageRecognition.DEBUG_DIR;
+        var dir = this.DEBUG_DIR;
         if (!files.exists(dir)) return;
 
         var allFiles = files.listDir(dir, function(f) {
