@@ -9,7 +9,7 @@ function TaskManager(config, imageRecognition, debugInfo) {
     this.currentState = "IDLE";
     this.isRunning = false;
     this.lastStateChangeTime = 0;
-    this.battleStartTime = 0; // 战斗开始时间，用于10分钟超时判断
+    this.battleStartTime = 0; // 战斗开始时间，用于超时判断
     this.taskThread = null;
     this.lastActionTime = 0; // 上次操作时间戳（间隔重试用）
 
@@ -61,6 +61,10 @@ TaskManager.prototype.start = function () {
     log("当前状态: " + this.currentState);
     toast("任务已启动: 初始化中");
 
+    // 清理过期调试截图（保留最近50张）
+    try { this.imageRecognition.cleanDebugShots(50); } catch(e) {}
+    log("[DEBUG_SHOT] 调试截图目录: " + (this.imageRecognition.DEBUG_DIR || "/sdcard/autoxjs_debug/"));
+
     var self = this;
     var loopCount = 0;
     var unknownCount = 0;  // 连续未知计数
@@ -96,10 +100,19 @@ TaskManager.prototype.start = function () {
                 var sceneType = self.imageRecognition.detectScene(screenshot);
                 log(">>> 场景检测结果: " + sceneType + " | 当前状态: " + self.currentState);
 
+                // ========== 调试截图：关键节点自动保存 ==========
+                var needDebugShot = false;
+                var debugLabel = "";
+
                 // 统计连续 UNKNOWN 次数
                 if (sceneType === "UNKNOWN") {
                     unknownCount++;
                     log("[!!] 连续第 " + unknownCount + " 次 UNKNOWN");
+                    // 每次UNKNOWN都保存截图（前3次每次都保存，之后每5次保存一次）
+                    if (unknownCount <= 3 || unknownCount % 5 === 0) {
+                        needDebugShot = true;
+                        debugLabel = self.currentState + "_UNKNOWN_" + unknownCount;
+                    }
                     if (unknownCount >= 3) {
                         toast("⚠ 无法识别屏幕(连续" + unknownCount + "次)\n请确认游戏在前台");
                         if (unknownCount % 5 === 0) {
@@ -107,7 +120,20 @@ TaskManager.prototype.start = function () {
                         }
                     }
                 } else {
+                    // 状态和场景不匹配时保存截图
+                    if (self.currentState !== "IDLE" && self.currentState !== "INIT"
+                        && sceneType !== self.currentState
+                        && !sceneType.startsWith(self.currentState.split("_")[0] + "_")) {
+                        // 非预期的场景切换，保存截图
+                        needDebugShot = true;
+                        debugLabel = self.currentState + "_GOT_" + sceneType;
+                    }
                     unknownCount = 0;
+                }
+
+                // 执行调试截图保存
+                if (needDebugShot) {
+                    self.imageRecognition.saveDebugShot(screenshot, debugLabel);
                 }
 
                 // 更新悬浮窗调试信息（每次都更新）
@@ -119,6 +145,14 @@ TaskManager.prototype.start = function () {
             } catch (e) {
                 log("[错误] 任务执行出错: " + e.message);
                 log("[错误] 堆栈: " + e.stack || "");
+                // 出错时也尝试保存当前屏幕截图
+                try {
+                    var errScreen = self.imageRecognition.captureScreen();
+                    if (errScreen) {
+                        self.imageRecognition.saveDebugShot(errScreen, "ERROR_" + e.message.replace(/[^a-zA-Z0-9_]/g, "_").substring(0, 30));
+                        errScreen.recycle();
+                    }
+                } catch (shotErr) {}
                 sleep(3000);
             }
         }
@@ -198,7 +232,7 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
         case "MAIN_MENU_SHOP":
         case "MAIN_MENU_JOURNEY":
         case "MAIN_MENU_BATTLE":
-            if (this._tryFollowScene(sceneType, currentTime, ["BATTLE_COMPLETE_TURN", "TRAINING_HALL"])) return;
+            if (this._tryFollowScene(sceneType, currentTime, ["BATTLE_COMPLETE_TURN", "IN_BATTLE", "TRAINING_HALL"])) return;
 
             // 判断当前是否在基地tab（只有基地tab才直接点历练大厅）
             var isOnBaseTab = (this.currentState === "MAIN_MENU_BASE" && sceneType === "MAIN_MENU_BASE");
@@ -305,33 +339,47 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
 
         // ==================== IN_BATTLE (战斗中) ====================
         case "IN_BATTLE":
-            // 首次进入IN_BATTLE状态，记录开始时间
             if (this.battleStartTime === 0) {
                 this.battleStartTime = Date.now();
-                log("  [状态机] 战斗计时开始: " + new Date().toLocaleTimeString());
+                log("  [状态机] 进入战斗，判断类型...");
             }
 
+            var battleElapsed = Date.now() - this.battleStartTime;
+
             if (sceneType === "IN_BATTLE") {
-                // ===== 正常战斗中 =====
-                // 每次确认在战斗中就刷新超时计时器（避免短暂切换导致误触发）
                 this.lastStateChangeTime = currentTime;
 
-                var battleElapsed = Date.now() - this.battleStartTime;
-                // 硬超时：超过10分钟强制退出
+                // ===== 每轮直接判断寰球/精英 =====
+                var huanqiuCheck = this.imageRecognition.matchTemplate(screenshot, "scene/battle/scene_huanqiu_battle", 0.6);
+                if (huanqiuCheck.found) {
+                    // 寰球救援 → 正常打
+                    log("  [状态机] ★ 寰球救援（已 " + Math.round(battleElapsed / 1000) + "s）");
+                    this.battleActions(screenshot);
+                } else if (battleElapsed > 5000) {
+                    // 5秒仍未识别到寰球特征 → 精英战斗，退出
+                    log("  [状态机] ⚠ 5秒未识别到寰球特征，判定精英战斗，退出！");
+                    toast("⚠ 误入精英战斗，正在退出...");
+                    this._exitUnwantedBattle(screenshot);
+                    this.battleStartTime = 0;
+                    this._switchState("TEAM_HALL", currentTime);
+                    break;
+                } else {
+                    // 5秒内等待确认
+                    log("  [状态机] 战斗类型待确认（已 " + Math.round(battleElapsed / 1000) + "s）...");
+                }
+
+                // 硬超时：10分钟
                 if (battleElapsed > 600000) {
-                    log("  [状态机] ⚠ 战斗已进行 " + Math.round(battleElapsed / 1000) + "s，超过10分钟，主动退出！");
-                    toast("战斗超时10分钟，正在退出...");
+                    log("  [状态机] ⚠ 战斗超时10分钟，退出！");
                     this._exitUnwantedBattle(screenshot);
                     this.battleStartTime = 0;
                     this._switchState("TEAM_HALL", currentTime);
                     break;
                 }
-                log("  [状态机] 正常战斗中（已 " + Math.round(battleElapsed / 1000) + "s），执行 battleActions");
-                this.battleActions(screenshot);
 
             } else if (sceneType === "BATTLE_COMPLETE_TURN") {
                 // 战斗结束出结算 → 切到BATTLE_COMPLETE_TURN状态
-                log("  [状态机] IN_BATTLE中检测到结算页 -> 切到 BATTLE_COMPLETE_TURN");
+                log("  [状态机] 战斗结束 → 切到 BATTLE_COMPLETE_TURN");
                 toast("⚡ 战斗结束，进入结算处理");
                 this.battleStartTime = 0;
                 this._switchState("BATTLE_COMPLETE_TURN", currentTime);
@@ -981,16 +1029,15 @@ TaskManager.prototype._exitUnwantedBattle = function (screenshot) {
 };
 
 /**
- * 战斗操作（纯模板匹配）
- * 技能选择：matchTemplate 检测 scene_skill_select，命中则点击屏幕中间
- * 冒泡图标：模板匹配并点击
- * 开始游戏：模板匹配按钮并点击
+ * 战斗操作 — 只处理技能选择弹窗，不乱点！
+ *
+ * ⚠ 核心原则：战斗进行中不应该主动点击任何东西
+ *   - 冒泡图标点击 → 导致切出微信/小程序
+ *   - "开始游戏"按钮 → 战斗中不存在，误匹配会乱点
+ *   - 唯一需要点击的是：限时技能选择弹窗（倒计时）
  */
 TaskManager.prototype.battleActions = function (screenshot) {
-    log(">>> 执行 battleActions: 战斗中（纯模板）");
-    toast("操作: 战斗中");
-
-    // ========== 技能选择检测（matchTemplate，比OCR更快更准）==========
+    // ========== 技能选择检测 ==========
     var skillResult = this.imageRecognition.matchTemplate(screenshot, "scene/battle/scene_skill_select");
     if (skillResult.found) {
         log("  [战斗] ✓ 检测到技能选择界面，点击屏幕中间选择技能");
@@ -1006,18 +1053,8 @@ TaskManager.prototype.battleActions = function (screenshot) {
         return;
     }
 
-    // 无技能选择 → 正常战斗中：点冒泡 / 点开始游戏
-    // 模板匹配冒泡图标并点击
-    var hp100Results = this.imageRecognition.findAllTemplates(screenshot, "click/huanqiu_room/click_chat_bubble");
-    if (hp100Results.length > 0) {
-        log("找到 " + hp100Results.length + " 个冒泡图标，点击");
-        this.clickAllPositions(hp100Results);
-    } else {
-        // 没有冒泡 → 尝试模板匹配"开始游戏"按钮
-        // ⚠ 需要在 scene/huanqiu_room/ 下放一个"开始游戏"按钮的模板
-        this.clickTemplate("scene/huanqiu_room/scene_huanqiu_room1")
-            || this.clickTemplate("click/huanqiu_room/click_chat_bubble"); // 兜底再试冒泡
-    }
+    // 正常战斗进行中 → 什么都不做，等结算
+    // 不点冒泡、不点任何按钮，避免切出微信
 };
 
 // ==================== 辅助操作 ====================

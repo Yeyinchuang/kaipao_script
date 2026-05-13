@@ -719,8 +719,10 @@ ImageRecognition.prototype.detectScene = function (screenshot) {
         for (var ri = 0; ri < sortedRules.length; ri++) {
             var rule = sortedRules[ri];
             if (!rule.templates || rule.templates.length === 0) continue;
+            // 支持每条规则独立阈值，未设置则用全局默认
+            var ruleThreshold = rule.threshold || this.templateThreshold;
             for (var ti = 0; ti < rule.templates.length; ti++) {
-                if (this.matchTemplate(screenshot, rule.templates[ti], this.templateThreshold).found) {
+                if (this.matchTemplate(screenshot, rule.templates[ti], ruleThreshold).found) {
                     log("[模板] ✓ " + rule.scene + " (" + rule.templates[ti] + ")");
                     return this._setScene(rule.scene, currentTime);
                 }
@@ -1031,6 +1033,86 @@ ImageRecognition.prototype.removeDuplicates = function (results) {
         if (!isDup) unique.push(results[i]);
     }
     return unique;
+};
+
+// ==================== 调试截图保存 ====================
+
+/**
+ * 调试截图保存目录（模拟器路径）
+ * 截图会保存到这里，通过 adb pull 或模拟器共享文件夹同步到电脑
+ */
+ImageRecognition.DEBUG_DIR = "/sdcard/autoxjs_debug/";
+
+/**
+ * 保存调试截图到固定目录
+ * @param {Image} screenshot 要保存的截图对象
+ * @param {string} label 标签，如 "IN_BATTLE_UNKNOWN" "ERROR_recycled"
+ * @returns {string|null} 保存的文件路径（相对路径），失败返回null
+ *
+ * 用法：
+ *   this.imageRecognition.saveDebugShot(screenshot, "STATE_" + state + "_SCENE_" + scene);
+ *   // 日志输出: [DEBUG_SHOT] → debug_shots/1822450501_IN_BATTLE_UNKNOWN.png
+ */
+ImageRecognition.prototype.saveDebugShot = function (screenshot, label) {
+    if (!screenshot) return null;
+
+    try {
+        // 确保目录存在
+        var dir = ImageRecognition.DEBUG_DIR;
+        if (!files.exists(dir)) {
+            files.createWithDirs(dir);
+        }
+
+        // 文件名: HHMMss_label.png
+        var now = new Date();
+        var timeStr = "" +
+            String(now.getHours()).padStart(2, "0") +
+            String(now.getMinutes()).padStart(2, "0") +
+            String(now.getSeconds()).padStart(2, "0") +
+            String(now.getMilliseconds()).padStart(3, "0");
+
+        // 清理标签中的非法字符
+        var safeLabel = (label || "shot").replace(/[^a-zA-Z0-9_\-]/g, "_");
+        var filename = timeStr + "_" + safeLabel + ".png";
+        var filepath = dir + filename;
+
+        images.save(screenshot, filepath);
+
+        // 输出短路径方便日志阅读
+        var shortPath = "debug_shots/" + filename;
+        log("[DEBUG_SHOT] → " + shortPath + " (" + label + ")");
+        return shortPath;
+    } catch (e) {
+        log("[DEBUG_SHOT] 保存失败: " + e.message);
+        return null;
+    }
+};
+
+/**
+ * 清理过期调试截图（保留最近N张）
+ * @param {number} keepRecent 保留数量，默认50
+ */
+ImageRecognition.prototype.cleanDebugShots = function (keepRecent) {
+    keepRecent = keepRecent || 50;
+    try {
+        var dir = ImageRecognition.DEBUG_DIR;
+        if (!files.exists(dir)) return;
+
+        var allFiles = files.listDir(dir, function(f) {
+            return f.isFile() && f.getName().endsWith(".png");
+        });
+        if (!allFiles || allFiles.length <= keepRecent) return;
+
+        // 按修改时间排序，删除最旧的
+        allFiles.sort(function(a, b) {
+            return a.lastModified() - b.lastModified();
+        });
+
+        for (var i = 0; i < allFiles.length - keepRecent; i++) {
+            files.remove(allFiles[i].getPath());
+        }
+        log("[DEBUG_SHOT] 清理完成，保留最近 " + keepRecent + " 张");
+    } catch (e) {}
 };
 
 module.exports = { ImageRecognition: ImageRecognition };

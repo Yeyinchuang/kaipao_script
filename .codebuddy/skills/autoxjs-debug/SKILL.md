@@ -1,0 +1,104 @@
+---
+name: autoxjs-debug
+description: AutoXJS + MuMu模拟器 调试截图系统。当用户在 AutoXJS 项目中遇到运行问题需要 debug 时使用此 skill。提供自动保存调试截图到模拟器、ADB 一键拉取到本地、以及通过日志+图片快速定位问题的完整工作流。适用于运行在 MuMu/雷电/逍遥等 Android 模拟器上的 AutoXJS 自动化脚本开发与调试场景。
+---
+
+# AutoXJS Debug — 调试截图系统
+
+## 概述
+
+AutoXJS 脚本运行在 Android 模拟器上时，传统 debug 流程（手动截屏 → 粘贴 → 分析）效率极低。
+
+本 Skill 提供的方案：**脚本自动保存关键节点截图 + ADB 一键拉取到本地 + 日志关联分析**，用户只需复制粘贴日志即可完成 debug。
+
+## 架构
+
+```
+┌──────────────┐  自动保存      ┌──────────────────┐   adb pull    ┌─────────────┐
+│  AutoXJS     │ ───────────→ │ /sdcard/autoxjs_ │ ──────────→ │ 本地电脑     │
+│  (模拟器内)   │  .png 截图    │ debug/            │              │ debug_shots/│
+└──────────────┘               └──────────────────┘              └─────────────┘
+       │                              │                               │
+       │ 日志含 [DEBUG_SHOT] 行       │ 文件名带时间戳标签           │ 我直接读图
+       ▼                              ▼                               ▼
+  用户复制日志给我 ─────────────→ 我读取对应 .png ─────────────→ 分析问题并修复
+```
+
+## 快速开始
+
+### 前置条件
+
+1. **确认 ADB 可用**：执行 `adb devices` 应显示 MuMu 设备（参考 `references/mumu-adb.md` 配置）
+2. **项目集成调试代码**：将 `assets/debug-shot-integration.js` 的代码合并到项目的 `imageRecognition.js` 和 `taskManager.js` 中
+
+### 使用流程
+
+```bash
+# 1. 运行 AutoXJS 脚本（截图会自动保存到模拟器）
+
+# 2. 出问题时，一键拉取所有调试截图：
+scripts/pull_debug.sh          # Linux/Mac
+scripts\\pull_debug.bat        # Windows
+
+# 3. 复制日志给我（包含 [DEBUG_SHOT] 行即可）
+
+# 4. 我会直接读取 debug_shots/ 下的图片进行分析
+```
+
+## 触发自动保存的关键节点
+
+| 触发条件 | 标签格式示例 | 频率 |
+|---------|-------------|------|
+| 场景识别 UNKNOWN（前3次） | `IN_BATTLE_UNKNOWN_1` | 每次 |
+| 场景识别 UNKNOWN（后续每5次） | `IN_BATTLE_UNKNOWN_5` | 每5次 |
+| 状态与场景不匹配 | `HUANQIU_ROOM_GOT_TEAM_HALL` | 每次 |
+| 异常出错 catch | `ERROR_image_has_been_recycled` | 每次 |
+
+文件命名：`HHMMSSmmm_LABEL.png`（毫秒级时间戳确保唯一性）
+
+## 集成指南
+
+### Step 1: imageRecognition.js 添加方法
+
+将 `assets/imageRecognition-debug-methods.js` 中的三个方法追加到 `ImageRecognition.prototype`：
+
+- `saveDebugShot(screenshot, label)` — 保存单张调试截图
+- `cleanDebugShots(keepRecent)` — 清理过期截图
+- `DEBUG_DIR` — 静态属性，存储目录路径
+
+### Step 2: taskManager.js 主循环集成
+
+在主循环的 `detectScene()` 之后添加调试截图调用逻辑（见 `assets/taskmanager-loop-integration.js`）。
+
+关键点：
+- UNKNOWN 前每次都保存，之后每5次
+- 状态/场景意外切换时保存
+- catch 块中出错时也保存当前屏幕
+
+### Step 3: 任务启动时清理
+
+在 `start()` 方法中加入启动时清理调用，防止截图堆积。
+
+## MuMu 模拟器配置
+
+详细配置说明见 `references/mumu-adb.md`，要点：
+
+| 项目 | 值 |
+|-----|---|
+| MuMu 12 ADB端口 | `127.0.0.1:7555` |
+| MuMu 9 ADB端口 | `127.0.0.1:16384` |
+| 连接命令 | `adb connect 127.0.0.1:7555` |
+| 截图远程路径 | `/sdcard/autoxjs_debug/` |
+
+## 脚本说明
+
+### pull_debug.bat / pull_debug.sh
+
+一键拉取模拟器截图到本地 `debug_shots/` 目录，完成后自动打开文件夹。
+
+参数可通过环境变量自定义：
+```bash
+export DEBUG_REMOTE_DIR="/sdcard/autoxjs_debug"
+export DEBUG_LOCAL_DIR="./debug_shots"
+./scripts/pull_debug.sh
+```
