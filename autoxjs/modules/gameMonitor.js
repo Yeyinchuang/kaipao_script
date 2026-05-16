@@ -117,18 +117,21 @@ GameMonitor.prototype._switchBackToWechat = function() {
 };
 
 /**
- * 判断小程序是否正在运行
+ * 判断小程序是否在前台运行
+ * 必须是当前 top activity 才算在前台
  */
 GameMonitor.prototype._isMiniProgramRunning = function() {
     try {
         var result = shell("dumpsys activity top | grep ACTIVITY", true);
         if (result && result.result) {
             var lines = result.result.split("\n");
-            for (var i = 0; i < lines.length; i++) {
-                if (lines[i].indexOf("com.tencent.mm") >= 0 
-                    && (lines[i].indexOf("AppBrand") >= 0 
-                    || lines[i].indexOf("LaunchAppUI") >= 0
-                    || lines[i].indexOf("game") >= 0)) {
+            // 只检查第一行（当前 top activity）
+            if (lines.length > 0) {
+                var topLine = lines[0];
+                if (topLine.indexOf("com.tencent.mm") >= 0 
+                    && (topLine.indexOf("AppBrand") >= 0 
+                    || topLine.indexOf("LaunchAppUI") >= 0
+                    || topLine.indexOf("game") >= 0)) {
                     return true;
                 }
             }
@@ -139,6 +142,7 @@ GameMonitor.prototype._isMiniProgramRunning = function() {
 
 /**
  * 启动游戏
+ * 每次都强制唤起小程序，不依赖进程检测
  */
 GameMonitor.prototype.launchGame = function() {
     log("[GameMonitor] 正在启动向僵尸开炮...");
@@ -147,13 +151,7 @@ GameMonitor.prototype.launchGame = function() {
     app.launch(this.packageName);
     sleep(3000);
 
-    // 如果小程序已经在运行，不需要重新启动
-    if (this._isMiniProgramRunning()) {
-        log("[GameMonitor] 小程序已在运行，无需重新启动");
-        return;
-    }
-
-    // 依次尝试多种唤起方式
+    // 强制唤起小程序（不管是否已在运行）
     var methods = [
         { name: "weixin://dl/business", fn: this._launchByBusinessScheme.bind(this) },
         { name: "am start AppBrandUI", fn: this._launchByAmStart.bind(this) },
@@ -165,14 +163,17 @@ GameMonitor.prototype.launchGame = function() {
         log("[GameMonitor] 尝试方案" + (i + 1) + ": " + methods[i].name);
         try {
             methods[i].fn();
-            sleep(4000);
+            sleep(5000);
             
-            if (this._isMiniProgramRunning()) {
+            // 检测当前是否是微信（小程序运行在微信内）
+            var currentPkg = currentPackage();
+            if (currentPkg === this.packageName) {
                 log("[GameMonitor] ✓ 小程序启动成功！");
-                sleep(3000);
+                log("[GameMonitor] 等待30秒让游戏完全加载...");
+                sleep(30000);
                 return;
             } else {
-                log("[GameMonitor] ✗ 方案" + (i + 1) + "未成功启动小程序");
+                log("[GameMonitor] ✗ 方案" + (i + 1) + "未成功启动小程序 (当前包:" + currentPkg + ")");
             }
         } catch (e) {
             log("[GameMonitor] 方案" + (i + 1) + "异常: " + e.message);

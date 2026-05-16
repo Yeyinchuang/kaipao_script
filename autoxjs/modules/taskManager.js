@@ -125,7 +125,7 @@ TaskManager.prototype.start = function () {
                         debugLabel = self.currentState + "_UNKNOWN_" + unknownCount;
                     }
                     // 连续UNKNOWN时 sleep 10秒等待恢复，3次(30秒)后报错退出
-                    if (unknownCount >= 3) {
+                    if (unknownCount >= 5) {
                         log("[!!] 连续 " + unknownCount + " 次UNKNOWN，已达上限，报错退出！");
                         toast("⚠ 连续30秒无法识别场景，任务终止！\n请把日志发给开发者分析");
                         self.imageRecognition.saveDebugShot(screenshot, "FATAL_UNKNOWN");
@@ -390,7 +390,7 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
                         log("  [状态机] 识别到精英特征（连续第 " + this.jingyingCount + " 次，置信度:" + jingyingCheck.confidence.toFixed(2) + "）");
 
                         // 连续3次识别到精英才确认退出
-                        if (this.jingyingCount >= 3) {
+                        if (this.jingyingCount >= 1) {
                             log("  [状态机] ⚠ 连续" + this.jingyingCount + "次识别到精英，确认精英战斗，退出！");
                             toast("⚠ 误入精英战斗，正在退出...");
                             this._exitUnwantedBattle(screenshot);
@@ -468,6 +468,23 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
             this._switchState(sceneType, currentTime);
             break;
 
+        // ==================== RECONNECT (重连提示) ====================
+        case "RECONNECT":
+            // 网络超时/断开重连提示 → 点击重新连接
+            if (sceneType === "RECONNECT") {
+                if (this._shouldRetryAction(currentTime, 3000)) {
+                    log("  [状态机] 检测到重连提示，点击重新连接...");
+                    toast("⚠ 网络断开，正在重连...");
+                    this.clickTemplate("scene/scene_reconnect");
+                    sleep(5000); // 等待重连
+                }
+            } else {
+                // 重连成功，场景变化
+                log("  [状态机] 重连成功，场景变为 " + sceneType);
+                this._switchState(sceneType, currentTime);
+            }
+            break;
+
         // ==================== default ====================
         // 其他未知状态：尝试关闭弹窗，然后跟随场景
         default:
@@ -499,7 +516,7 @@ TaskManager.prototype._tryFollowScene = function (sceneType, currentTime, extraA
     if (sceneType === this.currentState) return false;
 
     // 特殊场景在任何状态下都优先跟随（全局拦截）
-    var globalInterceptScenes = ["BATTLE_COMPLETE_TURN", "BATTLE_QUIT"];
+    var globalInterceptScenes = ["BATTLE_COMPLETE_TURN", "BATTLE_QUIT", "RECONNECT"];
     for (var i = 0; i < globalInterceptScenes.length; i++) {
         if (sceneType === globalInterceptScenes[i]) {
             log("  [状态机] 全局拦截: " + sceneType + " -> 跟随切换");

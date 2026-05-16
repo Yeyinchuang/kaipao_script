@@ -5,6 +5,13 @@
 
 // ==================== 场景识别规则配置表 ====================
 var SCENE_RULES = [
+    // ===== 最高优先：重连提示（网络超时等）=====
+    {
+        scene: "RECONNECT",
+        priority: -2,
+        templates: ["scene/scene_reconnect"]
+    },
+
     // ===== 最高优先：结算和退出 =====
     {
         scene: "BATTLE_COMPLETE_TURN",
