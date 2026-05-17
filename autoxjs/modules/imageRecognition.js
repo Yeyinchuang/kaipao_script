@@ -28,7 +28,11 @@ var SCENE_RULES = [
     {
         scene: "IN_BATTLE",
         priority: 0,
-        templates: ["scene/battle/scene_in_battle"]
+        threshold: 0.75, // 降低阈值，战斗中图标变化大
+        templates: [
+            "scene/battle/scene_in_battle",
+            "scene/battle/scene_in_battle_bak"
+        ]
     },
 
     // ===== 组队/招募频道 =====

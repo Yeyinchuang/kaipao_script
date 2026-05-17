@@ -124,17 +124,18 @@ TaskManager.prototype.start = function () {
                         needDebugShot = true;
                         debugLabel = self.currentState + "_UNKNOWN_" + unknownCount;
                     }
-                    // 连续UNKNOWN时 sleep 10秒等待恢复，3次(30秒)后报错退出
-                    if (unknownCount >= 5) {
+                    // 连续UNKNOWN时处理
+                    if (unknownCount >= 100) {
                         log("[!!] 连续 " + unknownCount + " 次UNKNOWN，已达上限，报错退出！");
-                        toast("⚠ 连续30秒无法识别场景，任务终止！\n请把日志发给开发者分析");
+                        toast("⚠ 连续100秒无法识别场景，任务终止！\n请把日志发给开发者分析");
                         self.imageRecognition.saveDebugShot(screenshot, "FATAL_UNKNOWN");
                         self.isRunning = false;
                         break;
                     } else {
-                        toast("⚠ 无法识别屏幕(连续" + unknownCount + "次)\n等待10秒后重试...");
-                        log("[!!] sleep 10秒等待场景恢复...");
-                        sleep(10000);
+                        // 战斗中短暂UNKNOWN只sleep 1秒（技能弹窗/暂停菜单等），其他情况sleep 5秒
+                        var sleepTime = (self.currentState === "IN_BATTLE") ? 1000 : 5000;
+                        log("[!!] 无法识别屏幕(连续" + unknownCount + "次)，sleep " + (sleepTime/1000) + "秒等待恢复...");
+                        sleep(sleepTime);
                     }
                 } else {
                     // 状态和场景不匹配时保存截图
@@ -840,7 +841,8 @@ TaskManager.prototype._spamClickJoinButtons = function (screenshot) {
             var quickCheck = this.imageRecognition.captureScreen();
             if (quickCheck) {
                 // 模板检测：战斗暂停按钮 → 已在战斗中 → 停止
-                if (this.imageRecognition.matchTemplate(quickCheck, "scene/battle/scene_in_battle", 0.75).found) {
+                if (this.imageRecognition.matchTemplate(quickCheck, "scene/battle/scene_in_battle", 0.75).found
+                    || this.imageRecognition.matchTemplate(quickCheck, "scene/battle/scene_in_battle_bak", 0.75).found) {
                     log("  [招募] ✓ 模板检测到战斗暂停按钮，已进入战斗，停止抢房");
                     quickCheck.recycle();
                     break;
