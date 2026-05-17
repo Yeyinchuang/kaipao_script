@@ -104,13 +104,19 @@ GameMonitor.prototype._checkAndRestore = function() {
 };
 
 /**
- * 切回微信
+ * 切回微信并唤起小程序
  */
 GameMonitor.prototype._switchBackToWechat = function() {
     try {
+        // 先切回微信
         app.launch(this.packageName);
-        toast("⚠ 游戏被切出，已自动切回");
         sleep(1500);
+
+        // 再用 URL Scheme 唤起小程序
+        this._launchByBusinessScheme();
+        sleep(3000);
+
+        toast("⚠ 游戏被切出，已自动切回");
     } catch (e) {
         log("[GameMonitor] 切回微信失败: " + e.message);
     }
@@ -169,8 +175,7 @@ GameMonitor.prototype.launchGame = function() {
             var currentPkg = currentPackage();
             if (currentPkg === this.packageName) {
                 log("[GameMonitor] ✓ 小程序启动成功！");
-                log("[GameMonitor] 等待30秒让游戏完全加载...");
-                sleep(30000);
+                sleep(3000);
                 return;
             } else {
                 log("[GameMonitor] ✗ 方案" + (i + 1) + "未成功启动小程序 (当前包:" + currentPkg + ")");
