@@ -602,28 +602,6 @@ TaskManager.prototype.clickByText = function (targetText, fallbackTemplate, regi
     return this.clickTemplate(fallbackTemplate);
 };
 
-/**
- * 模板点击 - 可传入截图对象复用（不重新截图）
- */
-TaskManager.prototype.clickTemplate = function (templateName, existingScreenshot) {
-    var screenshot = existingScreenshot || this.imageRecognition.captureScreen();
-    if (!screenshot) {
-        log("  [操作] ✗ 截图失败，无法匹配模板: " + templateName);
-        return false;
-    }
-
-    var result = this.imageRecognition.matchTemplate(screenshot, templateName, this.imageRecognition.templateThreshold);
-    if (result.found) {
-        log("  [操作] ✓ 模板匹配成功: " + templateName + " (" + result.x + ", " + result.y + ")");
-        this.smartClick(result.x, result.y);
-        if (!existingScreenshot) screenshot.recycle();
-        return true;
-    }
-
-    log("  [操作] ✗ 模板未匹配: " + templateName);
-    if (!existingScreenshot) screenshot.recycle();
-    return false;
-};
 
 /**
  * 主菜单操作 - 点击基地图标（多重策略）
@@ -769,10 +747,9 @@ TaskManager.prototype.gameRoomActions = function (screenshot) {
         return;
     }
 
-    // 步骤3: 都没找到，点击屏幕右侧常见冒泡位置
-    click(Math.floor(screenshot.getWidth() * 0.88), Math.floor(screenshot.getHeight() * 0.55));
-    log("  [游戏房间] 兜底：点击右侧冒泡区域");
-    sleep(2000);
+    // 步骤3: 都没找到冒泡，不再兜底坐标
+    // 右侧(0.88W, 0.55H)可能点到微信悬浮元素导致切出小程序
+    log("  [游戏房间] 未找到冒泡图标，跳过兜底点击");
     log("<<< gameRoomActions 完成");
 };
 
@@ -996,69 +973,75 @@ TaskManager.prototype._isUnwantedBattle = function (text) {
 };
 
 /**
- * 退出非目标战斗：坐标操作为主，模板兜底
- * 不依赖 click/click_close 模板（可能不存在）
- * 流程：关弹窗 → 点暂停(右上角) → 退坐标点击 → 结果页返回
+ * 退出非目标战斗：模板优先 + 安全覆盖区坐标兜底
+ * 
+ * 微信小程序安全区域（720x1280 为例）：
+ * - 危险区：y < 100（微信胶囊/返回按钮）, y > 1150（底部导航）
+ * - 安全区：游戏画面中央区域
+ * 
+ * 流程：关弹窗 → 点暂停 → 退出战斗 → 结果页返回
  */
 TaskManager.prototype._exitUnwantedBattle = function (screenshot) {
     log(">>> 执行 _exitUnwantedBattle: 退出非目标战斗");
     toast("⚠ 非目标战斗，正在退出...");
 
     var maxRetries = 3;
+    var sw = device.width || 720;
+    var sh = device.height || 1280;
 
     for (var attempt = 0; attempt < maxRetries && this.isRunning; attempt++) {
         log("  [退出] 第 " + (attempt + 1) + "/" + maxRetries + " 次尝试");
 
         // 步骤1: 点击屏幕中央关闭可能的技能选择/卡牌弹窗
-        var sw = device.width || 720;
-        var sh = device.height || 1280;
         for (var i = 0; i < 2; i++) {
             click(sw / 2 + random(-20, 20), sh * 0.55 + random(-15, 15));
             sleep(300);
         }
         sleep(500);
 
-        // 步骤2: 点击暂停按钮（优先模板匹配，兜底坐标）
+        // 步骤2: 点击暂停按钮（模板优先，安全坐标兜底）
         var pauseScreen = null;
         try { pauseScreen = this.imageRecognition.captureScreen(); } catch(e) {}
         
         var pauseClicked = false;
         if (pauseScreen) {
-            // 优先用模板匹配点击暂停图标
             pauseClicked = this.clickTemplate("click/bubble_chat/click_exit_quit", pauseScreen);
             try { pauseScreen.recycle(); } catch(e) {}
         }
         if (!pauseClicked) {
-            // 兜底：点右上角暂停按钮位置
-            click(sw - 25 + random(-8, 8), 45 + random(-8, 8));
-            log("  [退出] 模板未匹配暂停图标，使用坐标兜底");
+            // 安全兜底：暂停按钮在游戏画面右上角，但要避开微信胶囊区域
+            // 微信胶囊在右上角约 y < 100，暂停按钮在其下方
+            var pauseY = Math.floor(sh * 0.12); // 约 150px（1280屏幕），在胶囊下方
+            var pauseX = sw - Math.floor(sw * 0.08); // 偏右但不到边缘
+            log("  [退出] 模板未匹配暂停图标，安全坐标兜底 (" + pauseX + "," + pauseY + ")");
+            click(pauseX + random(-10, 10), pauseY + random(-10, 10));
         }
         sleep(1500);
 
-        // 步骤3: 点击"退出战斗"按钮（优先模板匹配，兜底坐标）
+        // 步骤3: 点击"退出战斗"按钮（模板优先，安全坐标兜底）
         var exitScreen = null;
         try { exitScreen = this.imageRecognition.captureScreen(); } catch(e) {}
 
         var exitClicked = false;
         if (exitScreen) {
-            // 优先用模板匹配点击退出战斗
             exitClicked = this.clickTemplate("click/bubble_chat/click_exit_battle", exitScreen);
             try { exitScreen.recycle(); } catch(e) {}
         }
         if (!exitClicked) {
-            // 兜底：点暂停菜单中"退出"按钮位置
-            click(sw / 2 + random(-30, 30), sh * 0.45 + random(-10, 10));
-            log("  [退出] 模板未匹配退出按钮，使用坐标兜底");
+            // 安全兜底：退出按钮在暂停菜单中央偏上
+            var exitX = Math.floor(sw / 2);
+            var exitY = Math.floor(sh * 0.38); // 菜单中部偏上
+            log("  [退出] 模板未匹配退出按钮，安全坐标兜底 (" + exitX + "," + exitY + ")");
+            click(exitX + random(-30, 30), exitY + random(-10, 10));
         }
         sleep(2000);
 
-        // 步骤4: 检测是否到了结果页/结算页，点返回
+        // 步骤4: 检测是否到了结果页/结算页，用模板点返回
         var resultScreen = null;
         try { resultScreen = this.imageRecognition.captureScreen(); } catch(e) { continue; }
         if (!resultScreen) continue;
 
         try {
-            // 尝试结算页返回模板
             if (this.clickTemplate("scene/battle/scene_jingying_return", resultScreen)
                 || this.clickTemplate("scene/battle/scene_huanqiu_return", resultScreen)
                 || this.clickTemplate("scene/battle/scene_quit", resultScreen)) {
@@ -1069,12 +1052,13 @@ TaskManager.prototype._exitUnwantedBattle = function (screenshot) {
                 log("<<< _exitUnwantedBattle 成功退出");
                 return;
             }
-            // 模板都没命中 → 坐标兜底
-            click(sw * 0.15, sh * 0.85);
-            log("  [退出] 坐标点击返回(左下角)");
+            // 安全兜底：结算页"返回"按钮通常在屏幕中下方（避开底部微信导航）
+            var returnX = Math.floor(sw * 0.35);  // 偏左但不在极端左下角
+            var returnY = Math.floor(sh * 0.78);   // 偏下但在微信导航上方
+            log("  [退出] 结算页模板均未命中，安全坐标兜底 (" + returnX + "," + returnY + ")");
+            click(returnX + random(-20, 20), returnY + random(-10, 10));
         } catch (e) {
             log("  [退出] 结果页处理异常: " + e.message);
-            click(sw * 0.15, sh * 0.85);
         }
         try { resultScreen.recycle(); } catch(e) {}
 
@@ -1084,7 +1068,8 @@ TaskManager.prototype._exitUnwantedBattle = function (screenshot) {
         return;
     }
 
-    log("<<< _exitUnwantedBattle 重试耗尽，强制back键");
+    // 重试耗尽，只用模板方式返回
+    log("<<< _exitUnwantedBattle 重试耗尽，尝试模板返回");
     this.backButtonClick();
 };
 
@@ -1193,19 +1178,26 @@ TaskManager.prototype.clickAllPositions = function (positions) {
 };
 
 /**
- * 通过模板名称点击
+ * 通过模板名称点击（无截图参数时自动截图）
+ * 统一入口：可传截图复用，也可不传自动截图
  */
-TaskManager.prototype.clickTemplate = function (templateName) {
-    var screenshot = this.imageRecognition.captureScreen();
-    if (!screenshot) return false;
+TaskManager.prototype.clickTemplate = function (templateName, existingScreenshot) {
+    var screenshot = existingScreenshot || this.imageRecognition.captureScreen();
+    if (!screenshot) {
+        log("  [操作] ✗ 截图失败，无法匹配模板: " + templateName);
+        return false;
+    }
 
-    var result = this.imageRecognition.matchTemplate(screenshot, templateName, 0.8);
-    screenshot.recycle();
-
+    var result = this.imageRecognition.matchTemplate(screenshot, templateName, this.imageRecognition.templateThreshold);
     if (result.found) {
+        log("  [操作] ✓ 模板匹配成功: " + templateName + " (" + result.x + ", " + result.y + ")");
         this.smartClick(result.x + 5, result.y + 5);
+        if (!existingScreenshot) screenshot.recycle();
         return true;
     }
+
+    log("  [操作] ✗ 模板未匹配: " + templateName);
+    if (!existingScreenshot) screenshot.recycle();
     return false;
 };
 
@@ -1222,9 +1214,13 @@ TaskManager.prototype.backButtonClick = function () {
         sleep(1500);
         return;
     }
-    // 模板都没命中，坐标兜底
-    log("返回模板均未命中，坐标点击左上角");
-    click(50, 50);
+    // 模板都没命中，安全坐标兜底（避开微信胶囊和返回按钮）
+    // 游戏内返回按钮通常在左上方偏下，y > 100 避开微信元素
+    var sw = device.width || 720;
+    var safeBackX = Math.floor(sw * 0.08);  // 左侧8%
+    var safeBackY = 130;                     // y=130 避开微信胶囊(y<100)
+    log("返回模板均未命中，安全坐标兜底 (" + safeBackX + "," + safeBackY + ")");
+    click(safeBackX + random(-5, 5), safeBackY + random(-5, 5));
     sleep(1500);
 };
 
@@ -1280,12 +1276,12 @@ TaskManager.prototype._clickReturnFallback = function () {
         return;
     }
 
-    // 策略4: 坐标兜底 — 结算页"返回"通常在底部左侧区域
+    // 策略4: 安全坐标兜底（避开微信导航栏）
     var sw = device.width || 720;
     var sh = device.height || 1280;
-    var fallbackX = Math.floor(sw * 0.15);   // 左侧15%
-    var fallbackY = Math.floor(sh * 0.85);   // 底部15%
-    log("  [结算] 所有策略均失败，使用坐标兜底: (" + fallbackX + ", " + fallbackY + ")");
+    var fallbackX = Math.floor(sw * 0.35);   // 偏左但不在极端左下角
+    var fallbackY = Math.floor(sh * 0.78);   // 偏下但在微信导航上方
+    log("  [结算] 所有模板策略均失败，安全坐标兜底: (" + fallbackX + ", " + fallbackY + ")");
     click(fallbackX, fallbackY);
     sleep(2000);
 };

@@ -9,7 +9,7 @@ function GameMonitor() {
     this.monitorThread = null;
     this.packageName = "com.tencent.mm"; // 微信包名
     this.miniProgramAppId = "wx31a9c726536cdacc"; // 向僵尸开炮小程序ID
-    this.checkInterval = 5000; // 检查间隔 5秒
+    this.checkInterval = 10000; // 检查间隔 10秒
 }
 
 /**
@@ -47,7 +47,13 @@ GameMonitor.prototype.diagnoseMiniProgram = function() {
     // 4. 当前包名
     log("[诊断] 当前包名: " + currentPackage());
 
-    // 5. 微信版本
+    // 5. 小程序进程检测
+    try {
+        var procResult = shell("ps | grep appbrand", true);
+        log("[诊断] 小程序进程:\n" + (procResult ? procResult.result : "null"));
+    } catch(e) {}
+
+    // 6. 微信版本
     try {
         var versionResult = shell("dumpsys package com.tencent.mm | grep versionName", true);
         log("[诊断] 微信版本:\n" + (versionResult ? versionResult.result : "null"));
@@ -92,27 +98,40 @@ GameMonitor.prototype.stop = function() {
 };
 
 /**
- * 检查当前前台应用，如果不是微信则切回来
+ * 检查当前前台应用
+ * 1. 完全不在微信 → 切回微信 + 唤起小程序
+ * 2. 在微信但小程序不在前台（如聊天页面）→ 只唤起小程序，不 app.launch
  */
 GameMonitor.prototype._checkAndRestore = function() {
     var currentPkg = currentPackage();
 
+    // 1. 完全不在微信 → 切回微信并唤起小程序
     if (currentPkg && currentPkg !== this.packageName) {
         log("[GameMonitor] 检测到游戏被切出 (当前:" + currentPkg + ")，正在切回微信...");
-        this._switchBackToWechat();
+        this._switchBackToWechat(true);
+        return;
+    }
+
+    // 2. 在微信但小程序不在前台 → 只唤起小程序，不需要重新 app.launch
+    if (currentPkg === this.packageName && !this._isMiniProgramRunning()) {
+        log("[GameMonitor] 检测到微信在前台但小程序不在，正在唤起小程序...");
+        this._switchBackToWechat(false);
     }
 };
 
 /**
  * 切回微信并唤起小程序
+ * @param {boolean} needLaunchWechat 是否需要先 app.launch 切回微信
  */
-GameMonitor.prototype._switchBackToWechat = function() {
+GameMonitor.prototype._switchBackToWechat = function(needLaunchWechat) {
     try {
-        // 先切回微信
-        app.launch(this.packageName);
-        sleep(1500);
+        if (needLaunchWechat) {
+            // 完全不在微信时，先切回微信
+            app.launch(this.packageName);
+            sleep(2000);
+        }
 
-        // 再用 URL Scheme 唤起小程序
+        // 唤起小程序
         this._launchByBusinessScheme();
         sleep(3000);
 
@@ -124,26 +143,66 @@ GameMonitor.prototype._switchBackToWechat = function() {
 
 /**
  * 判断小程序是否在前台运行
- * 必须是当前 top activity 才算在前台
+ * 
+ * 微信小程序在 Android 上的特征：
+ * - 运行在独立进程 com.tencent.mm:appbrand0/1/2...
+ * - Activity 名含 AppBrand / AppBrandContainer / LaunchAppUI 等
+ * - 微信聊天首页 Activity 为 LauncherUI（非小程序）
+ * 
+ * 检测策略（可靠性从高到低）：
+ * 1. 通过 ps 检查是否存在 appbrand 进程（进程名跨微信版本最稳定）
+ * 2. 通过 dumpsys activity top 检查 top activity 关键词
  */
 GameMonitor.prototype._isMiniProgramRunning = function() {
+    // 方法1: 检查是否存在 appbrand 进程（最可靠）
+    // 小程序运行在 com.tencent.mm:appbrand0 等独立进程
+    try {
+        var psResult = shell("ps -A | grep appbrand", true);
+        if (psResult && psResult.result && psResult.result.trim().length > 0) {
+            return true;
+        }
+    } catch (e) {
+        log("[GameMonitor] ps 检测失败: " + e.message);
+    }
+
+    // 方法2: 备用 — 检查 ps 不带 -A（某些旧 Android 版本）
+    try {
+        var psResult2 = shell("ps | grep appbrand", true);
+        if (psResult2 && psResult2.result && psResult2.result.trim().length > 0) {
+            return true;
+        }
+    } catch (e) {}
+
+    // 方法3: 检查 top activity
     try {
         var result = shell("dumpsys activity top | grep ACTIVITY", true);
         if (result && result.result) {
             var lines = result.result.split("\n");
-            // 只检查第一行（当前 top activity）
             if (lines.length > 0) {
                 var topLine = lines[0];
-                if (topLine.indexOf("com.tencent.mm") >= 0 
-                    && (topLine.indexOf("AppBrand") >= 0 
+                // 不是微信页面，肯定不在小程序
+                if (topLine.indexOf("com.tencent.mm") < 0) {
+                    return false;
+                }
+                // 微信聊天首页 → 不是小程序
+                if (topLine.indexOf("LauncherUI") >= 0) {
+                    return false;
+                }
+                // 小程序关键词
+                if (topLine.indexOf("AppBrand") >= 0
                     || topLine.indexOf("LaunchAppUI") >= 0
-                    || topLine.indexOf("game") >= 0)) {
+                    || topLine.indexOf("game") >= 0
+                    || topLine.indexOf("Container") >= 0) {
                     return true;
                 }
             }
         }
-    } catch (e) {}
-    return false;
+    } catch (e) {
+        log("[GameMonitor] dumpsys 检测失败: " + e.message);
+    }
+
+    // 无法确认时，默认认为在前台，避免误触发切回
+    return true;
 };
 
 /**

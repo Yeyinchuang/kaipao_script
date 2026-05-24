@@ -178,17 +178,31 @@ ImageRecognition.prototype.detectScene = function (screenshot) {
             return (a.priority || 99) - (b.priority || 99);
         });
 
+        // 收集所有模板的匹配分数，用于 UNKNOWN 时排查
+        var allScores = [];
+
         for (var ri = 0; ri < sortedRules.length; ri++) {
             var rule = sortedRules[ri];
             if (!rule.templates || rule.templates.length === 0) continue;
             var ruleThreshold = rule.threshold || this.templateThreshold;
             for (var ti = 0; ti < rule.templates.length; ti++) {
-                if (this.matchTemplate(screenshot, rule.templates[ti], ruleThreshold).found) {
-                    log("[模板] ✓ " + rule.scene + " (" + rule.templates[ti] + ")");
+                var matchResult = this.matchTemplate(screenshot, rule.templates[ti], ruleThreshold);
+                allScores.push({ scene: rule.scene, template: rule.templates[ti], confidence: matchResult.confidence });
+                if (matchResult.found) {
+                    log("[模板] ✓ " + rule.scene + " (" + rule.templates[ti] + ") score=" + matchResult.confidence.toFixed(3));
                     return this._setScene(rule.scene, currentTime);
                 }
             }
         }
+
+        // UNKNOWN 时按分数排序输出前5，方便查看哪个模板接近
+        allScores.sort(function (a, b) { return b.confidence - a.confidence; });
+        var topN = allScores.slice(0, 5);
+        var scoreLog = "[场景] UNKNOWN! Top5: ";
+        for (var si = 0; si < topN.length; si++) {
+            scoreLog += topN[si].scene + "(" + topN[si].template.split("/").pop() + ")=" + topN[si].confidence.toFixed(3) + " ";
+        }
+        log(scoreLog);
     } catch (e) {
         log("场景检测出错: " + e.message);
     }
