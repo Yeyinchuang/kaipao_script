@@ -17,6 +17,8 @@ function TaskManager(config, imageRecognition, debugInfo) {
     this.taskThread = null;
     this.lastActionTime = 0; // 上次操作时间戳（间隔重试用）
     this.gameMonitor = new GameMonitor(); // 游戏窗口监控
+    this.spamClickThread = null; // 抢房线程
+    this.spamClickRunning = false; // 抢房线程运行标志
 
     // 任务设置
     var taskConfig = config.task || {};
@@ -136,6 +138,26 @@ TaskManager.prototype.start = function () {
                         var sleepTime = (self.currentState === "IN_BATTLE") ? 1000 : 5000;
                         log("[!!] 无法识别屏幕(连续" + unknownCount + "次)，sleep " + (sleepTime/1000) + "秒等待恢复...");
                         sleep(sleepTime);
+
+                        // 通用兜底：UNKNOWN 时尝试用 return_tag / close_tag 模板点击
+                        // 适用于退出双人深渊/精英等无法识别场景的过渡页面
+                        if (self.currentState !== "IN_BATTLE" && unknownCount >= 2) {
+                            try {
+                                var returnMatched = self.imageRecognition.matchTemplate(screenshot, "common/return_tag", 0.8);
+                                if (!returnMatched.found) {
+                                    returnMatched = self.imageRecognition.matchTemplate(screenshot, "common/return_tag2", 0.8);
+                                }
+                                if (!returnMatched.found) {
+                                    returnMatched = self.imageRecognition.matchTemplate(screenshot, "common/close_tag", 0.8);
+                                }
+                                if (returnMatched.found) {
+                                    log("[!!] UNKNOWN 兜底：检测到返回/关闭按钮 (score=" + returnMatched.confidence.toFixed(3) + ")，点击");
+                                    self.smartClick(returnMatched.x + 5, returnMatched.y + 5);
+                                }
+                            } catch(e) {
+                                log("[!!] 返回/关闭兜底失败: " + e.message);
+                            }
+                        }
                     }
                 } else {
                     // 状态和场景不匹配时保存截图
@@ -159,7 +181,9 @@ TaskManager.prototype.start = function () {
 
                 self.processStateMachine(sceneType, screenshot);
                 screenshot.recycle();
-                sleep(1000);
+                // 抢房状态缩短主循环间隔到500ms，其他状态1秒
+                var loopSleep = (self.currentState === "RECRUIT_CHANNEL") ? 500 : 1000;
+                sleep(loopSleep);
             } catch (e) {
                 log("[错误] 任务执行出错: " + e.message);
                 log("[错误] 堆栈: " + e.stack || "");
@@ -188,6 +212,8 @@ TaskManager.prototype.stop = function () {
         this.taskThread.interrupt();
         this.taskThread = null;
     }
+    // 停止抢房线程
+    this._stopSpamClick();
     // 停止窗口守护
     this.gameMonitor.stop();
     log("任务已停止");
@@ -348,7 +374,9 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
         case "RECRUIT_CHANNEL":
             if (this._tryFollowScene(sceneType, currentTime, ["TEAM_HALL"])) return;
             if (sceneType === "RECRUIT_CHANNEL") {
-                if (this._shouldRetryAction(currentTime, 3000)) {
+                // 抢房采用独立线程，主循环只需启动一次（线程内部会持续狂点）
+                // _shouldRetryAction 控制重新检查场景的频率（1秒）
+                if (this._shouldRetryAction(currentTime, 1000)) {
                     this.recruitChannelActions(screenshot);
                 }
             } else if (currentTime - this.lastStateChangeTime > 60000) {
@@ -371,43 +399,47 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
             if (sceneType === "IN_BATTLE") {
                 this.lastStateChangeTime = currentTime;
 
-                // ===== 战斗中：只做技能选择，等待结算或精英识别 =====
+                // ===== 战斗类型判断 =====
+                // 寰球救援 → 正常打；精英/双人深渊 → 退出；未识别 → 继续打等结算
                 var huanqiuCheck = this.imageRecognition.matchTemplate(screenshot, "scene/battle/scene_huanqiu_battle", 0.6);
                 if (huanqiuCheck.found) {
-                    // 寰球救援 → 正常打
                     this.nonHuanqiuCount = 0;
                     this.jingyingCount = 0;
                     log("  [状态机] ★ 寰球救援（已 " + Math.round(battleElapsed / 1000) + "s）");
                     this.battleActions(screenshot);
                 } else {
-                    // 未识别到寰球标识 → 累计确认
                     this.nonHuanqiuCount++;
-                    log("  [状态机] 未识别到寰球特征（连续第 " + this.nonHuanqiuCount + " 次，已 " + Math.round(battleElapsed / 1000) + "s）");
 
-                    // 尝试匹配精英战斗标识（高阈值0.85防误判）
+                    // 检查是否是精英或双人深渊（确认后才退出，避免误判）
                     var jingyingCheck = this.imageRecognition.matchTemplate(screenshot, "scene/battle/scene_jingying_battle", 0.85);
+                    var shenyuanCheck = this.imageRecognition.matchTemplate(screenshot, "scene/battle/scene_shenyuan_battle", 0.85);
+
                     if (jingyingCheck.found) {
                         this.jingyingCount++;
-                        log("  [状态机] 识别到精英特征（连续第 " + this.jingyingCount + " 次，置信度:" + jingyingCheck.confidence.toFixed(2) + "）");
-
-                        // 连续3次识别到精英才确认退出
+                        log("  [状态机] 识别到精英特征（连续第 " + this.jingyingCount + " 次，score=" + jingyingCheck.confidence.toFixed(3) + "）");
                         if (this.jingyingCount >= 1) {
-                            log("  [状态机] ⚠ 连续" + this.jingyingCount + "次识别到精英，确认精英战斗，退出！");
+                            log("  [状态机] ⚠ 确认精英战斗，退出！");
                             toast("⚠ 误入精英战斗，正在退出...");
                             this._exitUnwantedBattle(screenshot);
                             this.battleStartTime = 0;
-                            this.nonHuanqiuCount = 0;
                             this.jingyingCount = 0;
                             this._switchState("TEAM_HALL", currentTime);
                             break;
                         }
+                    } else if (shenyuanCheck.found) {
+                        log("  [状态机] ⚠ 识别到双人深渊特征，退出！");
+                        toast("⚠ 误入双人深渊，正在退出...");
+                        this._exitUnwantedBattle(screenshot);
+                        this.battleStartTime = 0;
+                        this.jingyingCount = 0;
+                        this._switchState("TEAM_HALL", currentTime);
+                        break;
                     } else {
-                        this.jingyingCount = 0; // 未识别到精英，重置计数
+                        this.jingyingCount = 0;
+                        // 未识别到寰球但也不确认是精英/深渊 → 继续打等结算
+                        log("  [状态机] 战斗类型待确认（连续" + this.nonHuanqiuCount + "次未识别寰球），继续战斗");
+                        this.battleActions(screenshot);
                     }
-
-                    // 没有确认是精英 → 仍执行战斗操作，等结算
-                    log("  [状态机] 战斗类型待确认，继续战斗等待结算...");
-                    this.battleActions(screenshot);
                 }
 
                 // 硬超时：8分钟
@@ -415,7 +447,6 @@ TaskManager.prototype.processStateMachine = function (sceneType, screenshot) {
                     log("  [状态机] ⚠ 战斗超时8分钟，退出！");
                     this._exitUnwantedBattle(screenshot);
                     this.battleStartTime = 0;
-                    this.nonHuanqiuCount = 0;
                     this._switchState("TEAM_HALL", currentTime);
                     break;
                 }
@@ -546,6 +577,10 @@ TaskManager.prototype._tryFollowScene = function (sceneType, currentTime, extraA
  */
 TaskManager.prototype._switchState = function (newState, currentTime) {
     if (newState === this.currentState) return;
+    // 离开 RECRUIT_CHANNEL 时停止抢房线程
+    if (this.currentState === "RECRUIT_CHANNEL" && newState !== "RECRUIT_CHANNEL") {
+        this._stopSpamClick();
+    }
     log("  [状态机] >>> " + this.currentState + " -> " + newState);
     this.currentState = newState;
     this.lastStateChangeTime = currentTime;
@@ -789,54 +824,51 @@ TaskManager.prototype.enterTeamFlow = function () {
 };
 
 /**
- * 高频点击最下方房间加入（30秒持续狂点）
- * 中间每10秒识别一次场景，防止死循环
- * @param {Image} screenshot 当前截图
+ * 启动抢房线程（异步狂点）
+ * 主循环通过 _stopSpamClick 停止
  */
-TaskManager.prototype._spamClickJoinButtons = function (screenshot) {
-    var sw = screenshot.getWidth();
-    var sh = screenshot.getHeight();
-
-    // 只点最下方的房间卡片居中("多人挑战"区域)
+TaskManager.prototype._startSpamClick = function () {
+    if (this.spamClickRunning) return;
+    this.spamClickRunning = true;
+    var self = this;
+    var sw = device.width || 720;
+    var sh = device.height || 1280;
     var targetX = Math.floor(sw * 0.55);
     var targetY = Math.floor(sh * 0.700);
 
-    var durationMs = 30000;
-    var batchClicks = 20;
-    var batchIntervalMs = 50;
-    var endTime = Date.now() + durationMs;
-    var startTime = Date.now();
-    log("  [招募] 狂点最下方房间 (" + targetX + ", " + targetY + ")，持续" + (durationMs/1000) + "秒");
-
-    while (Date.now() < endTime && this.isRunning) {
-        for (var i = 0; i < batchClicks && Date.now() < endTime && this.isRunning; i++) {
-            click(targetX + random(-5, 5), targetY + random(-5, 5));
-            sleep(batchIntervalMs);
-        }
-        // 每10秒用模板快速检查是否已进入战斗/房间（避免死循环）
-        if ((Date.now() - startTime) > 0 && (Date.now() - startTime) % 10000 < batchClicks * batchIntervalMs) {
-            var quickCheck = this.imageRecognition.captureScreen();
-            if (quickCheck) {
-                // 模板检测：战斗暂停按钮 → 已在战斗中 → 停止
-                if (this.imageRecognition.matchTemplate(quickCheck, "scene/battle/scene_in_battle", 0.75).found
-                    || this.imageRecognition.matchTemplate(quickCheck, "scene/battle/scene_in_battle_bak", 0.75).found) {
-                    log("  [招募] ✓ 模板检测到战斗暂停按钮，已进入战斗，停止抢房");
-                    quickCheck.recycle();
-                    break;
-                }
-                // 模板检测：游戏房间特征 → 已进入房间 → 停止
-                if (this.imageRecognition.matchTemplate(quickCheck, "scene/huanqiu_room/scene_huanqiu_room1", 0.7).found
-                    || this.imageRecognition.matchTemplate(quickCheck, "scene/huanqiu_room/scene_huanqiu_room", 0.7).found) {
-                    log("  [招募] ✓ 模板检测到寰球房间特征，可能已进入房间，停止抢房");
-                    quickCheck.recycle();
-                    break;
-                }
-                quickCheck.recycle();
+    this.spamClickThread = threads.start(function () {
+        log("  [抢房] 线程启动，狂点 (" + targetX + "," + targetY + ")");
+        while (self.spamClickRunning && self.isRunning) {
+            try {
+                click(targetX + random(-5, 5), targetY + random(-5, 5));
+                sleep(50);
+            } catch (e) {
+                log("  [抢房] 线程异常: " + e.message);
+                break;
             }
         }
-    }
+        log("  [抢房] 线程已停止");
+    });
+};
 
-    log("<<< _spamClickJoinButtons 完成");
+/**
+ * 停止抢房线程
+ */
+TaskManager.prototype._stopSpamClick = function () {
+    if (!this.spamClickRunning) return;
+    this.spamClickRunning = false;
+    if (this.spamClickThread) {
+        try { this.spamClickThread.interrupt(); } catch (e) {}
+        this.spamClickThread = null;
+    }
+};
+
+/**
+ * 单次抢房点击（异步版）— 已废弃，保留接口兼容
+ * 改为线程方式，由状态机控制启停
+ */
+TaskManager.prototype._spamClickJoinButtons = function (screenshot) {
+    this._startSpamClick();
 };
 
 /**
@@ -860,12 +892,15 @@ TaskManager.prototype.teamHallActions = function (screenshot) {
 };
 
 /**
- * 招募频道操作 - 疯狂点击抢房
- * 已确认在招募频道，直接高频点击加入按钮
+ * 招募频道操作 - 启动抢房线程
+ * 实际狂点由独立线程做，主循环继续检测场景
  */
 TaskManager.prototype.recruitChannelActions = function (screenshot) {
-    log(">>> 执行 recruitChannelActions: 疯狂抢房");
-    this._spamClickJoinButtons(screenshot);
+    if (!this.spamClickRunning) {
+        log(">>> recruitChannelActions: 启动抢房线程");
+        this._spamClickJoinButtons(screenshot);
+    }
+    // 线程已在运行时不重复启动，主循环直接返回继续场景检测
 };
 
 /**
@@ -1068,8 +1103,7 @@ TaskManager.prototype._exitUnwantedBattle = function (screenshot) {
         return;
     }
 
-    // 重试耗尽，只用模板方式返回
-    log("<<< _exitUnwantedBattle 重试耗尽，尝试模板返回");
+    // 用 backButtonClick 模板
     this.backButtonClick();
 };
 
@@ -1090,11 +1124,10 @@ TaskManager.prototype.battleActions = function (screenshot) {
         var sh = screenshot.getHeight();
         var targetX = Math.floor(sw * 0.50);
         var targetY = Math.floor(sh * 0.58);
-        var skillEndTime = Date.now() + 3000;
-        while (Date.now() < skillEndTime && this.isRunning) {
-            click(targetX + random(-8, 8), targetY + random(-8, 8));
-            sleep(50);
-        }
+        // 异步版：只点两下，不阻塞3秒
+        click(targetX + random(-8, 8), targetY + random(-8, 8));
+        sleep(200);
+        click(targetX + random(-8, 8), targetY + random(-8, 8));
         return;
     }
 
@@ -1210,6 +1243,9 @@ TaskManager.prototype.backButtonClick = function () {
     // 多个返回/关闭模板依次尝试
     if (this.clickTemplate("scene/battle/scene_quit")
         || this.clickTemplate("scene/battle/scene_huanqiu_return")
+        || this.clickTemplate("common/return_tag")
+        || this.clickTemplate("common/return_tag2")
+        || this.clickTemplate("common/close_tag")
         || this.clickTemplate("click/click_close")) {
         sleep(1500);
         return;
